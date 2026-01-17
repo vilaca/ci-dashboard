@@ -12,6 +12,7 @@ type Pipeline struct {
 	Status     Status
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
+	Duration   time.Duration
 	WebURL     string
 	Builds     []Build
 

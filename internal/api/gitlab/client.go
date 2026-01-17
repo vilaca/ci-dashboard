@@ -126,6 +126,9 @@ func (c *Client) convertProjects(glProjects []gitlabProject) []domain.Project {
 
 // convertPipeline converts a GitLab pipeline to domain model.
 func (c *Client) convertPipeline(glp gitlabPipeline, projectID string) *domain.Pipeline {
+	// Calculate duration
+	duration := glp.UpdatedAt.Sub(glp.CreatedAt)
+
 	return &domain.Pipeline{
 		ID:         fmt.Sprintf("%d", glp.ID),
 		ProjectID:  projectID,
@@ -133,6 +136,7 @@ func (c *Client) convertPipeline(glp gitlabPipeline, projectID string) *domain.P
 		Status:     convertStatus(glp.Status),
 		CreatedAt:  glp.CreatedAt,
 		UpdatedAt:  glp.UpdatedAt,
+		Duration:   duration,
 		WebURL:     glp.WebURL,
 		Repository: "", // Will be filled by service layer
 	}

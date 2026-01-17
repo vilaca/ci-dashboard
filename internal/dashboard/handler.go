@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/vilaca/ci-dashboard/internal/domain"
+	"github.com/vilaca/ci-dashboard/internal/service"
 )
 
 // Handler handles HTTP requests for the dashboard.
@@ -14,6 +15,8 @@ type Handler struct {
 	renderer        Renderer
 	logger          Logger
 	pipelineService PipelineService
+	runsPerRepo     int
+	recentLimit     int
 }
 
 // Logger interface for logging operations (Interface Segregation Principle).
@@ -28,24 +31,32 @@ type PipelineService interface {
 	GetLatestPipelines(ctx context.Context) ([]domain.Pipeline, error)
 	GroupPipelinesByWorkflow(pipelines []domain.Pipeline) map[string][]domain.Pipeline
 	GetPipelinesByWorkflow(ctx context.Context, projectID, workflowID string, limit int) ([]domain.Pipeline, error)
+	GetRepositoriesWithRecentRuns(ctx context.Context, runsPerRepo int) ([]RepositoryWithRuns, error)
+	GetRecentPipelines(ctx context.Context, totalLimit int) ([]domain.Pipeline, error)
 }
+
+// RepositoryWithRuns is imported from service package
+type RepositoryWithRuns = service.RepositoryWithRuns
 
 // NewHandler creates a new Handler with injected dependencies (Dependency Inversion Principle).
 // This follows IoC (Inversion of Control) by accepting dependencies rather than creating them.
-func NewHandler(renderer Renderer, logger Logger, pipelineService PipelineService) *Handler {
+func NewHandler(renderer Renderer, logger Logger, pipelineService PipelineService, runsPerRepo, recentLimit int) *Handler {
 	return &Handler{
 		renderer:        renderer,
 		logger:          logger,
 		pipelineService: pipelineService,
+		runsPerRepo:     runsPerRepo,
+		recentLimit:     recentLimit,
 	}
 }
 
 // RegisterRoutes registers all HTTP routes.
 // Separated from constructor to follow Single Level of Abstraction Principle (SLAP).
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("/", h.handleIndex)
+	mux.HandleFunc("/", h.handleRepositories)
 	mux.HandleFunc("/api/health", h.handleHealth)
-	mux.HandleFunc("/pipelines", h.handlePipelines)
+	mux.HandleFunc("/repository", h.handleRepositoryDetail)
+	mux.HandleFunc("/pipelines", h.handleRecentPipelines)
 	mux.HandleFunc("/pipelines/grouped", h.handlePipelinesGrouped)
 	mux.HandleFunc("/pipelines/workflow", h.handleWorkflowRuns)
 	mux.HandleFunc("/api/pipelines", h.handlePipelinesAPI)
@@ -151,6 +162,82 @@ func (h *Handler) handleWorkflowRuns(w http.ResponseWriter, r *http.Request) {
 
 	if err := h.renderer.RenderPipelines(w, pipelines); err != nil {
 		h.logger.Printf("failed to render workflow runs: %v", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+}
+
+// handleRepositories serves the repositories page with recent runs.
+func (h *Handler) handleRepositories(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html")
+
+	repositories, err := h.pipelineService.GetRepositoriesWithRecentRuns(r.Context(), h.runsPerRepo)
+	if err != nil {
+		h.logger.Printf("failed to get repositories: %v", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	if err := h.renderer.RenderRepositories(w, repositories); err != nil {
+		h.logger.Printf("failed to render repositories: %v", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+}
+
+// handleRepositoryDetail serves the repository detail page.
+// Query param: ?id=owner/repo or ?id=123
+func (h *Handler) handleRepositoryDetail(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html")
+
+	repositoryID := r.URL.Query().Get("id")
+	if repositoryID == "" {
+		http.Error(w, "Missing repository id parameter", http.StatusBadRequest)
+		return
+	}
+
+	// Get all repositories to find the specific one
+	repositories, err := h.pipelineService.GetRepositoriesWithRecentRuns(r.Context(), 50)
+	if err != nil {
+		h.logger.Printf("failed to get repositories: %v", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	// Find the repository by ID
+	var repository *RepositoryWithRuns
+	for i := range repositories {
+		if repositories[i].Project.ID == repositoryID {
+			repository = &repositories[i]
+			break
+		}
+	}
+
+	if repository == nil {
+		http.Error(w, "Repository not found", http.StatusNotFound)
+		return
+	}
+
+	if err := h.renderer.RenderRepositoryDetail(w, *repository); err != nil {
+		h.logger.Printf("failed to render repository detail: %v", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+}
+
+// handleRecentPipelines serves the recent pipelines page.
+func (h *Handler) handleRecentPipelines(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html")
+
+	pipelines, err := h.pipelineService.GetRecentPipelines(r.Context(), h.recentLimit)
+	if err != nil {
+		h.logger.Printf("failed to get recent pipelines: %v", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	if err := h.renderer.RenderRecentPipelines(w, pipelines); err != nil {
+		h.logger.Printf("failed to render recent pipelines: %v", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}

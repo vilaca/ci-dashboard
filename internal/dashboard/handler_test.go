@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/vilaca/ci-dashboard/internal/domain"
+	"github.com/vilaca/ci-dashboard/internal/service"
 )
 
 // mockRenderer is a test double for Renderer (follows FIRST - Independent).
@@ -19,6 +20,9 @@ type mockRenderer struct {
 	pipelinesErr         error
 	pipelinesJSONErr     error
 	pipelinesGroupedErr  error
+	repositoriesErr      error
+	recentPipelinesErr   error
+	repositoryDetailErr  error
 }
 
 func (m *mockRenderer) RenderIndex(w io.Writer) error {
@@ -61,6 +65,30 @@ func (m *mockRenderer) RenderPipelinesGrouped(w io.Writer, pipelinesByWorkflow m
 	return err
 }
 
+func (m *mockRenderer) RenderRepositories(w io.Writer, repositories []service.RepositoryWithRuns) error {
+	if m.repositoriesErr != nil {
+		return m.repositoriesErr
+	}
+	_, err := w.Write([]byte("mock repositories"))
+	return err
+}
+
+func (m *mockRenderer) RenderRecentPipelines(w io.Writer, pipelines []domain.Pipeline) error {
+	if m.recentPipelinesErr != nil {
+		return m.recentPipelinesErr
+	}
+	_, err := w.Write([]byte("mock recent pipelines"))
+	return err
+}
+
+func (m *mockRenderer) RenderRepositoryDetail(w io.Writer, repository service.RepositoryWithRuns) error {
+	if m.repositoryDetailErr != nil {
+		return m.repositoryDetailErr
+	}
+	_, err := w.Write([]byte("mock repository detail"))
+	return err
+}
+
 // mockLogger is a test double for Logger.
 type mockLogger struct {
 	messages []string
@@ -72,11 +100,13 @@ func (m *mockLogger) Printf(format string, v ...interface{}) {
 
 // mockPipelineService is a test double for PipelineService.
 type mockPipelineService struct {
-	getAllProjectsFunc        func(ctx context.Context) ([]domain.Project, error)
-	getPipelinesByProjectFunc func(ctx context.Context, projectIDs []string) ([]domain.Pipeline, error)
-	getLatestPipelinesFunc    func(ctx context.Context) ([]domain.Pipeline, error)
-	groupPipelinesByWorkflowFunc func(pipelines []domain.Pipeline) map[string][]domain.Pipeline
-	getPipelinesByWorkflowFunc func(ctx context.Context, projectID, workflowID string, limit int) ([]domain.Pipeline, error)
+	getAllProjectsFunc               func(ctx context.Context) ([]domain.Project, error)
+	getPipelinesByProjectFunc        func(ctx context.Context, projectIDs []string) ([]domain.Pipeline, error)
+	getLatestPipelinesFunc           func(ctx context.Context) ([]domain.Pipeline, error)
+	groupPipelinesByWorkflowFunc     func(pipelines []domain.Pipeline) map[string][]domain.Pipeline
+	getPipelinesByWorkflowFunc       func(ctx context.Context, projectID, workflowID string, limit int) ([]domain.Pipeline, error)
+	getRepositoriesWithRecentRunsFunc func(ctx context.Context, runsPerRepo int) ([]service.RepositoryWithRuns, error)
+	getRecentPipelinesFunc            func(ctx context.Context, totalLimit int) ([]domain.Pipeline, error)
 }
 
 func (m *mockPipelineService) GetAllProjects(ctx context.Context) ([]domain.Project, error) {
@@ -114,6 +144,20 @@ func (m *mockPipelineService) GetPipelinesByWorkflow(ctx context.Context, projec
 	return []domain.Pipeline{}, nil
 }
 
+func (m *mockPipelineService) GetRepositoriesWithRecentRuns(ctx context.Context, runsPerRepo int) ([]service.RepositoryWithRuns, error) {
+	if m.getRepositoriesWithRecentRunsFunc != nil {
+		return m.getRepositoriesWithRecentRunsFunc(ctx, runsPerRepo)
+	}
+	return []service.RepositoryWithRuns{}, nil
+}
+
+func (m *mockPipelineService) GetRecentPipelines(ctx context.Context, totalLimit int) ([]domain.Pipeline, error) {
+	if m.getRecentPipelinesFunc != nil {
+		return m.getRecentPipelinesFunc(ctx, totalLimit)
+	}
+	return []domain.Pipeline{}, nil
+}
+
 // TestHandleHealth tests the health check endpoint.
 // Follows AAA (Arrange, Act, Assert) and FIRST principles.
 func TestHandleHealth(t *testing.T) {
@@ -121,7 +165,7 @@ func TestHandleHealth(t *testing.T) {
 	renderer := &mockRenderer{}
 	logger := &mockLogger{}
 	pipelineService := &mockPipelineService{}
-	handler := NewHandler(renderer, logger, pipelineService)
+	handler := NewHandler(renderer, logger, pipelineService, 3, 50)
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 
@@ -153,7 +197,7 @@ func TestHandleHealth_RenderError(t *testing.T) {
 	renderer := &mockRenderer{healthErr: errors.New("render error")}
 	logger := &mockLogger{}
 	pipelineService := &mockPipelineService{}
-	handler := NewHandler(renderer, logger, pipelineService)
+	handler := NewHandler(renderer, logger, pipelineService, 3, 50)
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 
@@ -179,7 +223,7 @@ func TestHandleIndex(t *testing.T) {
 	renderer := &mockRenderer{}
 	logger := &mockLogger{}
 	pipelineService := &mockPipelineService{}
-	handler := NewHandler(renderer, logger, pipelineService)
+	handler := NewHandler(renderer, logger, pipelineService, 3, 50)
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 
@@ -199,18 +243,18 @@ func TestHandleIndex(t *testing.T) {
 		t.Errorf("expected Content-Type text/html, got %s", contentType)
 	}
 
-	if !strings.Contains(w.Body.String(), "mock index") {
-		t.Errorf("expected body to contain 'mock index', got %q", w.Body.String())
+	if !strings.Contains(w.Body.String(), "mock repositories") {
+		t.Errorf("expected body to contain 'mock repositories', got %q", w.Body.String())
 	}
 }
 
 // TestHandleIndex_RenderError tests error handling in index endpoint.
 func TestHandleIndex_RenderError(t *testing.T) {
 	// Arrange
-	renderer := &mockRenderer{indexErr: errors.New("render error")}
+	renderer := &mockRenderer{repositoriesErr: errors.New("render error")}
 	logger := &mockLogger{}
 	pipelineService := &mockPipelineService{}
-	handler := NewHandler(renderer, logger, pipelineService)
+	handler := NewHandler(renderer, logger, pipelineService, 3, 50)
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 
@@ -236,13 +280,13 @@ func TestHandlePipelines(t *testing.T) {
 	renderer := &mockRenderer{}
 	logger := &mockLogger{}
 	pipelineService := &mockPipelineService{
-		getLatestPipelinesFunc: func(ctx context.Context) ([]domain.Pipeline, error) {
+		getRecentPipelinesFunc: func(ctx context.Context, totalLimit int) ([]domain.Pipeline, error) {
 			return []domain.Pipeline{
 				{ID: "1", Repository: "test-repo", Status: domain.StatusSuccess},
 			}, nil
 		},
 	}
-	handler := NewHandler(renderer, logger, pipelineService)
+	handler := NewHandler(renderer, logger, pipelineService, 3, 50)
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 
@@ -257,8 +301,8 @@ func TestHandlePipelines(t *testing.T) {
 		t.Errorf("expected status 200, got %d", w.Code)
 	}
 
-	if !strings.Contains(w.Body.String(), "mock pipelines") {
-		t.Errorf("expected body to contain 'mock pipelines', got %q", w.Body.String())
+	if !strings.Contains(w.Body.String(), "mock recent pipelines") {
+		t.Errorf("expected body to contain 'mock recent pipelines', got %q", w.Body.String())
 	}
 }
 
@@ -268,11 +312,11 @@ func TestHandlePipelines_ServiceError(t *testing.T) {
 	renderer := &mockRenderer{}
 	logger := &mockLogger{}
 	pipelineService := &mockPipelineService{
-		getLatestPipelinesFunc: func(ctx context.Context) ([]domain.Pipeline, error) {
+		getRecentPipelinesFunc: func(ctx context.Context, totalLimit int) ([]domain.Pipeline, error) {
 			return nil, errors.New("service error")
 		},
 	}
-	handler := NewHandler(renderer, logger, pipelineService)
+	handler := NewHandler(renderer, logger, pipelineService, 3, 50)
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 
@@ -302,7 +346,7 @@ func TestHandlePipelinesAPI(t *testing.T) {
 			return []domain.Pipeline{}, nil
 		},
 	}
-	handler := NewHandler(renderer, logger, pipelineService)
+	handler := NewHandler(renderer, logger, pipelineService, 3, 50)
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 
@@ -331,7 +375,7 @@ func TestNewHandler(t *testing.T) {
 	pipelineService := &mockPipelineService{}
 
 	// Act
-	handler := NewHandler(renderer, logger, pipelineService)
+	handler := NewHandler(renderer, logger, pipelineService, 3, 50)
 
 	// Assert
 	if handler == nil {

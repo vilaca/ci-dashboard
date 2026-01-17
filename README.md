@@ -6,9 +6,14 @@ A dashboard for monitoring CI/CD pipelines from GitLab and GitHub in one unified
 
 - 🔄 **Multi-Platform Support**: Monitor both GitLab and GitHub Actions pipelines
 - 📊 **Real-time Status**: View latest pipeline statuses at a glance
-- 🎨 **Clean UI**: Simple, intuitive web interface
+- 🎨 **Clean UI**: Simple, intuitive web interface with dark mode toggle
 - 🔌 **REST API**: JSON API for integration with other tools
 - ⚡ **Fast**: Concurrent API calls for quick data retrieval
+- 🔒 **Repository Whitelisting**: Restrict access to specific repositories for security
+- ⚙️ **Flexible Configuration**: YAML file or environment variables (env vars take priority)
+- 🎯 **GitHub Workflows**: Each GitHub Actions workflow displayed as a separate pipeline
+- ⏱️ **Duration Tracking**: View pipeline execution time at a glance
+- 📈 **Smart Sorting**: Repositories sorted by latest run time
 
 ## Quick Start
 
@@ -120,19 +125,117 @@ If you must use classic tokens:
 
 ### Configuration
 
-Set environment variables for the platforms you want to monitor:
+The dashboard supports two configuration methods: **YAML file** and **environment variables**.
+
+**Configuration Priority Order:**
+1. **Environment Variables** (highest priority)
+2. **YAML Configuration File**
+3. **Default Values** (lowest priority)
+
+#### Option 1: YAML Configuration File (Recommended)
+
+Create a `config.yaml` file in the application directory:
+
+```yaml
+# Copy from config.example.yaml and customize
+port: 8080
+
+gitlab:
+  url: https://gitlab.com
+  token: your-gitlab-token
+  watched_repos:
+    - "123"      # GitLab project IDs
+    - "456"
+
+github:
+  url: https://api.github.com
+  token: your-github-token
+  watched_repos:
+    - "owner/repo1"    # GitHub owner/repo format
+    - "owner/repo2"
+
+display:
+  runs_per_repository: 3      # Number of recent runs per repo
+  recent_pipelines_limit: 50  # Total pipelines on recent page
+```
+
+**YAML File Location:**
+- Default: `./config.yaml` or `./config.yml`
+- Custom: Set `CONFIG_FILE` environment variable
+
+#### Option 2: Environment Variables
 
 ```bash
-# GitLab (optional)
-export GITLAB_URL="https://gitlab.com"  # Default: https://gitlab.com
+# Server Configuration
+export PORT=8080                          # Default: 8080
+export CONFIG_FILE="/path/to/config.yaml" # Optional: Custom config file
+
+# GitLab Configuration (optional)
+export GITLAB_URL="https://gitlab.com"           # Default: https://gitlab.com
 export GITLAB_TOKEN="your-gitlab-token"
+export GITLAB_WATCHED_REPOS="123,456"            # Comma-separated project IDs
 
-# GitHub (optional)
-export GITHUB_URL="https://api.github.com"  # Default: https://api.github.com
+# GitHub Configuration (optional)
+export GITHUB_URL="https://api.github.com"       # Default: https://api.github.com
 export GITHUB_TOKEN="your-github-token"
+export GITHUB_WATCHED_REPOS="owner/repo1,owner/repo2"  # Comma-separated repos
 
-# Server configuration
-export PORT=8080  # Default: 8080
+# Display Configuration
+export RUNS_PER_REPOSITORY=3              # Default: 3
+export RECENT_PIPELINES_LIMIT=50          # Default: 50
+```
+
+#### Repository Whitelisting (Security Feature)
+
+**Important:** For security and privacy, you can restrict which repositories the dashboard can access:
+
+- **GitLab**: Use numeric project IDs (e.g., `123`, `456`)
+- **GitHub**: Use `owner/repo` format (e.g., `facebook/react`, `golang/go`)
+
+When whitelists are configured:
+- ✅ **Only whitelisted repositories** will be monitored
+- ❌ **All other repositories** will be ignored, even if the token has access
+- 🔒 **No data** from non-whitelisted repos will be fetched or displayed
+
+**Empty/Unset Whitelist:**
+- If no whitelist is configured, **all accessible repositories** will be monitored
+
+#### Configuration Examples
+
+**Example 1: YAML with Whitelist (Recommended for Production)**
+```yaml
+# config.yaml
+gitlab:
+  token: glpat-xxxxxxxxxxxx
+  watched_repos:
+    - "123"  # Only monitor project 123
+
+github:
+  token: github_pat_xxxxxxxxxxxx
+  watched_repos:
+    - "myorg/app1"
+    - "myorg/app2"
+```
+
+**Example 2: Mixed YAML + Environment Variables**
+```yaml
+# config.yaml - Base configuration
+port: 8080
+github:
+  watched_repos:
+    - "myorg/app1"
+```
+
+```bash
+# Override token via environment variable (keeps it out of YAML file)
+export GITHUB_TOKEN="github_pat_xxxxxxxxxxxx"
+```
+
+**Example 3: Environment Variables Only**
+```bash
+export GITHUB_TOKEN="github_pat_xxxxxxxxxxxx"
+export GITHUB_WATCHED_REPOS="owner/repo1,owner/repo2"
+export RUNS_PER_REPOSITORY=5
 ```
 
 ### Building
@@ -154,6 +257,36 @@ make run
 
 The server will start on port 8080 by default.
 
+### Development with Hot-Reload
+
+For development with automatic reload on code changes, use [Air](https://github.com/air-verse/air):
+
+```bash
+# Run with hot-reload (auto-installs Air if needed)
+make dev
+
+# Or manually install Air first
+make install-air
+air
+
+# With environment variables
+GITHUB_TOKEN="ghp_xxx" GITLAB_TOKEN="glpat_xxx" make dev
+```
+
+Air will:
+- ✨ Automatically rebuild when you save Go files
+- 🔄 Restart the server with the new build
+- 📝 Show build errors in real-time
+- 🚀 Significantly speed up development workflow
+
+Configuration is already set up in `.air.toml`.
+
+**Note**: If you want to run `air` directly (without `make dev`), ensure your Go bin directory is in your PATH:
+```bash
+# Add to your ~/.bashrc, ~/.zshrc, or ~/.profile
+export PATH="$PATH:$(go env GOPATH)/bin"
+```
+
 ### Testing
 
 ```bash
@@ -173,24 +306,45 @@ make test
 
 Once running, access the dashboard at:
 
-- **Home**: http://localhost:8080/
-- **Pipelines View**: http://localhost:8080/pipelines
-- **JSON API**: http://localhost:8080/api/pipelines
+- **Home (Repositories View)**: http://localhost:8080/
+  - Repository cards sorted by latest activity
+  - Last N runs per repository (configurable via `RUNS_PER_REPOSITORY`)
+  - Each run shows: workflow name, time, duration, and status
 
-The dashboard will automatically fetch and display:
-- Latest pipeline status for all accessible projects
-- Pipeline branch information
-- Links to view full details on GitLab/GitHub
+- **Recent Pipelines View**: http://localhost:8080/pipelines
+  - Table of most recent pipelines across all repositories
+  - Sorted by update time (most recent first)
+  - Limit configurable via `RECENT_PIPELINES_LIMIT`
+
+- **Grouped Pipelines View**: http://localhost:8080/pipelines/grouped
+  - Pipelines grouped by workflow name (GitHub) or repository (GitLab)
+
+- **Workflow Runs**: http://localhost:8080/pipelines/workflow?project=owner/repo&workflow=123
+  - View all runs for a specific GitHub Actions workflow
+
+- **JSON API**: http://localhost:8080/api/pipelines
+  - Programmatic access to pipeline data
+
+The dashboard features:
+- 🌓 **Dark mode toggle** in the top-right corner
+- 🔄 **Auto-refresh** capability
+- 📊 **Duration tracking** for all pipeline runs
+- 🔗 **Direct links** to view full details on GitLab/GitHub
 
 ## API Endpoints
 
 ### Web Interface
-- `GET /` - Main dashboard landing page
-- `GET /pipelines` - Pipelines status page (HTML)
+- `GET /` - Repositories view (cards with recent runs, sorted by latest activity)
+- `GET /repository` - Repository detail page (requires `?id=owner/repo` or `?id=123` query param)
+  - Shows repository statistics (success rate, total runs, average duration)
+  - Lists all recent runs for the repository
+- `GET /pipelines` - Recent pipelines view (table of most recent pipelines)
+- `GET /pipelines/grouped` - Grouped pipelines view (organized by workflow/repository)
+- `GET /pipelines/workflow` - Workflow-specific runs (requires `?project=owner/repo&workflow=123` query params)
 
 ### REST API
-- `GET /api/health` - Health check endpoint
-- `GET /api/pipelines` - Pipelines data (JSON)
+- `GET /api/health` - Health check endpoint (returns `{"status":"ok"}`)
+- `GET /api/pipelines` - Pipelines data (JSON format)
 
 ### API Response Example
 
@@ -205,12 +359,19 @@ The dashboard will automatically fetch and display:
       "status": "success",
       "created_at": "2024-01-01T10:00:00Z",
       "updated_at": "2024-01-01T10:05:00Z",
-      "web_url": "https://gitlab.com/user/my-project/-/pipelines/123"
+      "duration": 300000000000,
+      "web_url": "https://gitlab.com/user/my-project/-/pipelines/123",
+      "workflow_name": "CI",
+      "workflow_id": "12345"
     }
   ],
   "count": 1
 }
 ```
+
+**Note**:
+- `duration` is in nanoseconds (300000000000 = 5 minutes)
+- `workflow_name` and `workflow_id` are present for GitHub Actions, null for GitLab
 
 ## Design Principles
 
@@ -233,7 +394,8 @@ Key architectural decisions:
 ## Development
 
 This project uses:
-- Go 1.23+ with standard library (no external dependencies)
+- Go 1.23+ with minimal external dependencies
+  - `gopkg.in/yaml.v3` - YAML configuration file support
 - Dependency injection for loose coupling
 - Interface-based design for testability
 - AAA testing pattern with FIRST principles

@@ -163,6 +163,9 @@ func (c *Client) convertPipeline(run githubWorkflowRun, projectID string) *domai
 	workflowName := run.Name
 	workflowID := fmt.Sprintf("%d", run.WorkflowID)
 
+	// Calculate duration
+	duration := run.UpdatedAt.Sub(run.CreatedAt)
+
 	return &domain.Pipeline{
 		ID:           fmt.Sprintf("%d", run.ID),
 		ProjectID:    projectID,
@@ -171,6 +174,7 @@ func (c *Client) convertPipeline(run githubWorkflowRun, projectID string) *domai
 		Status:       convertStatus(run.Status, run.Conclusion),
 		CreatedAt:    run.CreatedAt,
 		UpdatedAt:    run.UpdatedAt,
+		Duration:     duration,
 		WebURL:       run.HTMLURL,
 		WorkflowName: &workflowName,
 		WorkflowID:   &workflowID,

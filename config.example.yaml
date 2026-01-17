@@ -1,0 +1,48 @@
+# CI Dashboard Configuration
+# This file shows all available configuration options.
+# Copy this file to config.yaml and customize for your needs.
+
+# Server port (default: 8080)
+port: 8080
+
+# GitLab configuration
+gitlab:
+  # GitLab API URL (default: https://gitlab.com)
+  url: https://gitlab.com
+
+  # GitLab personal access token (required for GitLab integration)
+  # Create at: https://gitlab.com/-/profile/personal_access_tokens
+  # Required scopes: read_api, read_repository
+  token: your-gitlab-token-here
+
+  # List of watched GitLab repository IDs (optional)
+  # If specified, only these repositories will be monitored
+  # Format: numeric project ID (e.g., 123, 456)
+  watched_repos:
+    - "123"
+    - "456"
+
+# GitHub configuration
+github:
+  # GitHub API URL (default: https://api.github.com)
+  url: https://api.github.com
+
+  # GitHub personal access token (required for GitHub integration)
+  # Create at: https://github.com/settings/tokens
+  # Required scopes: repo (for private repos) or public_repo (for public repos)
+  token: your-github-token-here
+
+  # List of watched GitHub repositories (optional)
+  # If specified, only these repositories will be monitored
+  # Format: owner/repo (e.g., facebook/react, golang/go)
+  watched_repos:
+    - "owner/repo1"
+    - "owner/repo2"
+
+# Display configuration
+display:
+  # Number of recent runs to show per repository on the home page (default: 3)
+  runs_per_repository: 3
+
+  # Total number of pipelines to show on the recent pipelines page (default: 50)
+  recent_pipelines_limit: 50

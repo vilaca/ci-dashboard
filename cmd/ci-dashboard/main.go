@@ -25,13 +25,19 @@ func main() {
 
 	// Start server
 	addr := fmt.Sprintf(":%d", cfg.Port)
-	log.Printf("Starting CI Dashboard on %s", addr)
+	log.Printf("Starting CI Dashboard on http://localhost%s", addr)
 
 	if cfg.HasGitLabConfig() {
 		log.Printf("GitLab integration enabled")
+		if len(cfg.GetGitLabWatchedRepos()) > 0 {
+			log.Printf("GitLab whitelist: %d repositories", len(cfg.GetGitLabWatchedRepos()))
+		}
 	}
 	if cfg.HasGitHubConfig() {
 		log.Printf("GitHub integration enabled")
+		if len(cfg.GetGitHubWatchedRepos()) > 0 {
+			log.Printf("GitHub whitelist: %d repositories", len(cfg.GetGitHubWatchedRepos()))
+		}
 	}
 	if !cfg.HasGitLabConfig() && !cfg.HasGitHubConfig() {
 		log.Printf("WARNING: No CI platforms configured. Set GITLAB_TOKEN or GITHUB_TOKEN")
@@ -51,8 +57,11 @@ func buildServer(cfg *config.Config) http.Handler {
 	renderer := dashboard.NewHTMLRenderer()
 	httpClient := &http.Client{}
 
-	// Create pipeline service
-	pipelineService := service.NewPipelineService()
+	// Create pipeline service with whitelists
+	pipelineService := service.NewPipelineService(
+		cfg.GetGitLabWatchedRepos(),
+		cfg.GetGitHubWatchedRepos(),
+	)
 
 	// Register CI clients based on configuration
 	if cfg.HasGitLabConfig() {
@@ -72,7 +81,7 @@ func buildServer(cfg *config.Config) http.Handler {
 	}
 
 	// Create handler with dependencies (Dependency Injection)
-	handler := dashboard.NewHandler(renderer, logger, pipelineService)
+	handler := dashboard.NewHandler(renderer, logger, pipelineService, cfg.RunsPerRepository, cfg.RecentPipelinesLimit)
 
 	// Register routes
 	mux := http.NewServeMux()

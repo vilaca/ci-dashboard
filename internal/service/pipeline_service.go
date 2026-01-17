@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/vilaca/ci-dashboard/internal/api"
 	"github.com/vilaca/ci-dashboard/internal/domain"
@@ -12,14 +13,19 @@ import (
 // PipelineService handles business logic for pipeline operations.
 // Follows Single Responsibility Principle - orchestrates pipeline operations.
 type PipelineService struct {
-	clients map[string]api.Client // platform name -> client
-	mu      sync.RWMutex
+	clients          map[string]api.Client // platform name -> client
+	gitlabWhitelist  []string              // allowed GitLab repository IDs (nil = allow all)
+	githubWhitelist  []string              // allowed GitHub repository IDs (nil = allow all)
+	mu               sync.RWMutex
 }
 
 // NewPipelineService creates a new pipeline service.
-func NewPipelineService() *PipelineService {
+// gitlabWhitelist and githubWhitelist restrict access to specified repositories (nil = allow all).
+func NewPipelineService(gitlabWhitelist, githubWhitelist []string) *PipelineService {
 	return &PipelineService{
-		clients: make(map[string]api.Client),
+		clients:         make(map[string]api.Client),
+		gitlabWhitelist: gitlabWhitelist,
+		githubWhitelist: githubWhitelist,
 	}
 }
 
@@ -29,6 +35,37 @@ func (s *PipelineService) RegisterClient(platform string, client api.Client) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.clients[platform] = client
+}
+
+// isWhitelisted checks if a project is in the appropriate whitelist.
+// Returns true if whitelist is empty (allow all) or if project is in whitelist.
+func (s *PipelineService) isWhitelisted(project domain.Project) bool {
+	var whitelist []string
+
+	// Select the appropriate whitelist based on platform
+	switch project.Platform {
+	case "gitlab":
+		whitelist = s.gitlabWhitelist
+	case "github":
+		whitelist = s.githubWhitelist
+	default:
+		// Unknown platform - deny by default if any whitelist is set
+		return len(s.gitlabWhitelist) == 0 && len(s.githubWhitelist) == 0
+	}
+
+	// No whitelist for this platform means allow all
+	if len(whitelist) == 0 {
+		return true
+	}
+
+	// Check if project ID is in whitelist
+	for _, allowed := range whitelist {
+		if project.ID == allowed {
+			return true
+		}
+	}
+
+	return false
 }
 
 // GetAllProjects retrieves projects from all configured platforms.
@@ -65,6 +102,17 @@ func (s *PipelineService) GetAllProjects(ctx context.Context) ([]domain.Project,
 	// Check for errors
 	if len(errChan) > 0 {
 		return nil, <-errChan
+	}
+
+	// Filter projects based on whitelist
+	if len(s.gitlabWhitelist) > 0 || len(s.githubWhitelist) > 0 {
+		filtered := make([]domain.Project, 0)
+		for _, project := range allProjects {
+			if s.isWhitelisted(project) {
+				filtered = append(filtered, project)
+			}
+		}
+		allProjects = filtered
 	}
 
 	return allProjects, nil
@@ -165,4 +213,156 @@ func (s *PipelineService) GetPipelinesByWorkflow(ctx context.Context, projectID,
 	}
 
 	return nil, fmt.Errorf("workflow not found")
+}
+
+// RepositoryWithRuns represents a repository with its recent pipeline runs.
+type RepositoryWithRuns struct {
+	Project domain.Project
+	Runs    []domain.Pipeline
+}
+
+// GetRepositoriesWithRecentRuns retrieves all repositories with their recent pipeline runs.
+func (s *PipelineService) GetRepositoriesWithRecentRuns(ctx context.Context, runsPerRepo int) ([]RepositoryWithRuns, error) {
+	projects, err := s.GetAllProjects(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get projects: %w", err)
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var results []RepositoryWithRuns
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	// For each project, fetch recent runs
+	for _, project := range projects {
+		wg.Add(1)
+		go func(proj domain.Project) {
+			defer wg.Done()
+
+			var runs []domain.Pipeline
+
+			// Try to fetch pipelines from the appropriate client
+			for _, client := range s.clients {
+				pipelines, err := client.GetPipelines(ctx, proj.ID, runsPerRepo)
+				if err == nil && len(pipelines) > 0 {
+					// Fill in repository name from project
+					for i := range pipelines {
+						if pipelines[i].Repository == "" || pipelines[i].Repository == proj.ID {
+							pipelines[i].Repository = proj.Name
+						}
+					}
+					runs = pipelines
+					break
+				}
+			}
+
+			mu.Lock()
+			results = append(results, RepositoryWithRuns{
+				Project: proj,
+				Runs:    runs,
+			})
+			mu.Unlock()
+		}(project)
+	}
+
+	wg.Wait()
+
+	// Sort repositories by latest run time (most recent first)
+	// Repositories with no runs appear at the end
+	for i := 0; i < len(results)-1; i++ {
+		for j := 0; j < len(results)-i-1; j++ {
+			// Get latest run time for repository j
+			timeJ := getLatestRunTime(results[j])
+			// Get latest run time for repository j+1
+			timeJPlus1 := getLatestRunTime(results[j+1])
+
+			// Sort: most recent first (later time comes before earlier time)
+			if timeJ.Before(timeJPlus1) {
+				results[j], results[j+1] = results[j+1], results[j]
+			}
+		}
+	}
+
+	return results, nil
+}
+
+// getLatestRunTime returns the latest UpdatedAt time from a repository's runs.
+// Returns zero time if there are no runs.
+func getLatestRunTime(repo RepositoryWithRuns) time.Time {
+	var latest time.Time
+	for _, run := range repo.Runs {
+		if run.UpdatedAt.After(latest) {
+			latest = run.UpdatedAt
+		}
+	}
+	return latest
+}
+
+// GetRecentPipelines retrieves the most recent pipelines across all projects.
+func (s *PipelineService) GetRecentPipelines(ctx context.Context, totalLimit int) ([]domain.Pipeline, error) {
+	projects, err := s.GetAllProjects(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get projects: %w", err)
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var allPipelines []domain.Pipeline
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	// Calculate how many pipelines to fetch per project
+	// Fetch more than needed, then we'll sort and limit
+	pipelinesPerProject := 10
+	if len(projects) > 0 {
+		pipelinesPerProject = (totalLimit / len(projects)) + 5
+	}
+
+	// For each project, fetch recent runs
+	for _, project := range projects {
+		wg.Add(1)
+		go func(proj domain.Project) {
+			defer wg.Done()
+
+			// Try to fetch pipelines from the appropriate client
+			for _, client := range s.clients {
+				pipelines, err := client.GetPipelines(ctx, proj.ID, pipelinesPerProject)
+				if err == nil && len(pipelines) > 0 {
+					// Fill in repository name from project
+					for i := range pipelines {
+						if pipelines[i].Repository == "" || pipelines[i].Repository == proj.ID {
+							pipelines[i].Repository = proj.Name
+						}
+					}
+
+					mu.Lock()
+					allPipelines = append(allPipelines, pipelines...)
+					mu.Unlock()
+					break
+				}
+			}
+		}(project)
+	}
+
+	wg.Wait()
+
+	// Sort by UpdatedAt (most recent first)
+	// Simple bubble sort for now
+	for i := 0; i < len(allPipelines)-1; i++ {
+		for j := 0; j < len(allPipelines)-i-1; j++ {
+			if allPipelines[j].UpdatedAt.Before(allPipelines[j+1].UpdatedAt) {
+				allPipelines[j], allPipelines[j+1] = allPipelines[j+1], allPipelines[j]
+			}
+		}
+	}
+
+	// Limit to totalLimit
+	if len(allPipelines) > totalLimit {
+		allPipelines = allPipelines[:totalLimit]
+	}
+
+	return allPipelines, nil
 }
