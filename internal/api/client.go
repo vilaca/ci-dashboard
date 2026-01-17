@@ -20,6 +20,16 @@ type Client interface {
 	GetPipelines(ctx context.Context, projectID string, limit int) ([]domain.Pipeline, error)
 }
 
+// WorkflowClient extends Client with workflow-specific operations.
+// This is optional - only GitHub implements it.
+// Follows Interface Segregation Principle.
+type WorkflowClient interface {
+	Client
+
+	// GetWorkflowRuns returns runs for a specific workflow.
+	GetWorkflowRuns(ctx context.Context, projectID string, workflowID string, limit int) ([]domain.Pipeline, error)
+}
+
 // ClientConfig holds common configuration for API clients.
 type ClientConfig struct {
 	BaseURL string

@@ -88,6 +88,24 @@ func (c *Client) GetPipelines(ctx context.Context, projectID string, limit int) 
 	return pipelines, nil
 }
 
+// GetWorkflowRuns retrieves runs for a specific workflow.
+func (c *Client) GetWorkflowRuns(ctx context.Context, projectID string, workflowID string, limit int) ([]domain.Pipeline, error) {
+	url := fmt.Sprintf("%s/repos/%s/actions/workflows/%s/runs?per_page=%d",
+		c.baseURL, projectID, workflowID, limit)
+
+	var response githubWorkflowRunsResponse
+	if err := c.doRequest(ctx, url, &response); err != nil {
+		return nil, fmt.Errorf("failed to get workflow runs: %w", err)
+	}
+
+	pipelines := make([]domain.Pipeline, len(response.WorkflowRuns))
+	for i, run := range response.WorkflowRuns {
+		pipelines[i] = *c.convertPipeline(run, projectID)
+	}
+
+	return pipelines, nil
+}
+
 // doRequest performs an HTTP request to GitHub API.
 // Follows Single Level of Abstraction Principle (SLAP).
 func (c *Client) doRequest(ctx context.Context, url string, result interface{}) error {
@@ -141,15 +159,21 @@ func (c *Client) convertPipeline(run githubWorkflowRun, projectID string) *domai
 		repository = parts[1]
 	}
 
+	// Convert workflow info to pointers for optional fields
+	workflowName := run.Name
+	workflowID := fmt.Sprintf("%d", run.WorkflowID)
+
 	return &domain.Pipeline{
-		ID:         fmt.Sprintf("%d", run.ID),
-		ProjectID:  projectID,
-		Repository: repository,
-		Branch:     run.HeadBranch,
-		Status:     convertStatus(run.Status, run.Conclusion),
-		CreatedAt:  run.CreatedAt,
-		UpdatedAt:  run.UpdatedAt,
-		WebURL:     run.HTMLURL,
+		ID:           fmt.Sprintf("%d", run.ID),
+		ProjectID:    projectID,
+		Repository:   repository,
+		Branch:       run.HeadBranch,
+		Status:       convertStatus(run.Status, run.Conclusion),
+		CreatedAt:    run.CreatedAt,
+		UpdatedAt:    run.UpdatedAt,
+		WebURL:       run.HTMLURL,
+		WorkflowName: &workflowName,
+		WorkflowID:   &workflowID,
 	}
 }
 
@@ -194,6 +218,7 @@ type githubWorkflowRunsResponse struct {
 type githubWorkflowRun struct {
 	ID         int       `json:"id"`
 	Name       string    `json:"name"`
+	WorkflowID int       `json:"workflow_id"`
 	HeadBranch string    `json:"head_branch"`
 	Status     string    `json:"status"`
 	Conclusion string    `json:"conclusion"`

@@ -133,3 +133,36 @@ func (s *PipelineService) GetLatestPipelines(ctx context.Context) ([]domain.Pipe
 
 	return s.GetPipelinesByProject(ctx, projectIDs)
 }
+
+// GroupPipelinesByWorkflow groups pipelines by their workflow name.
+// Pipelines without workflow (GitLab) are grouped under empty string key.
+func (s *PipelineService) GroupPipelinesByWorkflow(pipelines []domain.Pipeline) map[string][]domain.Pipeline {
+	grouped := make(map[string][]domain.Pipeline)
+
+	for _, p := range pipelines {
+		key := ""
+		if p.WorkflowName != nil {
+			key = *p.WorkflowName
+		}
+		grouped[key] = append(grouped[key], p)
+	}
+
+	return grouped
+}
+
+// GetPipelinesByWorkflow retrieves pipelines for a specific workflow.
+func (s *PipelineService) GetPipelinesByWorkflow(ctx context.Context, projectID, workflowID string, limit int) ([]domain.Pipeline, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for _, client := range s.clients {
+		if wc, ok := client.(api.WorkflowClient); ok {
+			pipelines, err := wc.GetWorkflowRuns(ctx, projectID, workflowID, limit)
+			if err == nil && len(pipelines) > 0 {
+				return pipelines, nil
+			}
+		}
+	}
+
+	return nil, fmt.Errorf("workflow not found")
+}

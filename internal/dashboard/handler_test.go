@@ -14,10 +14,11 @@ import (
 
 // mockRenderer is a test double for Renderer (follows FIRST - Independent).
 type mockRenderer struct {
-	indexErr         error
-	healthErr        error
-	pipelinesErr     error
-	pipelinesJSONErr error
+	indexErr             error
+	healthErr            error
+	pipelinesErr         error
+	pipelinesJSONErr     error
+	pipelinesGroupedErr  error
 }
 
 func (m *mockRenderer) RenderIndex(w io.Writer) error {
@@ -52,6 +53,14 @@ func (m *mockRenderer) RenderPipelinesJSON(w io.Writer, pipelines []domain.Pipel
 	return err
 }
 
+func (m *mockRenderer) RenderPipelinesGrouped(w io.Writer, pipelinesByWorkflow map[string][]domain.Pipeline) error {
+	if m.pipelinesGroupedErr != nil {
+		return m.pipelinesGroupedErr
+	}
+	_, err := w.Write([]byte("mock grouped pipelines"))
+	return err
+}
+
 // mockLogger is a test double for Logger.
 type mockLogger struct {
 	messages []string
@@ -63,9 +72,11 @@ func (m *mockLogger) Printf(format string, v ...interface{}) {
 
 // mockPipelineService is a test double for PipelineService.
 type mockPipelineService struct {
-	getAllProjectsFunc      func(ctx context.Context) ([]domain.Project, error)
+	getAllProjectsFunc        func(ctx context.Context) ([]domain.Project, error)
 	getPipelinesByProjectFunc func(ctx context.Context, projectIDs []string) ([]domain.Pipeline, error)
-	getLatestPipelinesFunc  func(ctx context.Context) ([]domain.Pipeline, error)
+	getLatestPipelinesFunc    func(ctx context.Context) ([]domain.Pipeline, error)
+	groupPipelinesByWorkflowFunc func(pipelines []domain.Pipeline) map[string][]domain.Pipeline
+	getPipelinesByWorkflowFunc func(ctx context.Context, projectID, workflowID string, limit int) ([]domain.Pipeline, error)
 }
 
 func (m *mockPipelineService) GetAllProjects(ctx context.Context) ([]domain.Project, error) {
@@ -85,6 +96,20 @@ func (m *mockPipelineService) GetPipelinesByProject(ctx context.Context, project
 func (m *mockPipelineService) GetLatestPipelines(ctx context.Context) ([]domain.Pipeline, error) {
 	if m.getLatestPipelinesFunc != nil {
 		return m.getLatestPipelinesFunc(ctx)
+	}
+	return []domain.Pipeline{}, nil
+}
+
+func (m *mockPipelineService) GroupPipelinesByWorkflow(pipelines []domain.Pipeline) map[string][]domain.Pipeline {
+	if m.groupPipelinesByWorkflowFunc != nil {
+		return m.groupPipelinesByWorkflowFunc(pipelines)
+	}
+	return make(map[string][]domain.Pipeline)
+}
+
+func (m *mockPipelineService) GetPipelinesByWorkflow(ctx context.Context, projectID, workflowID string, limit int) ([]domain.Pipeline, error) {
+	if m.getPipelinesByWorkflowFunc != nil {
+		return m.getPipelinesByWorkflowFunc(ctx, projectID, workflowID, limit)
 	}
 	return []domain.Pipeline{}, nil
 }

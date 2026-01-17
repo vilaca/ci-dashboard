@@ -14,6 +14,10 @@ type Pipeline struct {
 	UpdatedAt  time.Time
 	WebURL     string
 	Builds     []Build
+
+	// Optional workflow fields for GitHub Actions (nil for GitLab)
+	WorkflowName *string
+	WorkflowID   *string
 }
 
 // Build represents a single job/build within a pipeline.

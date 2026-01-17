@@ -26,6 +26,8 @@ type PipelineService interface {
 	GetAllProjects(ctx context.Context) ([]domain.Project, error)
 	GetPipelinesByProject(ctx context.Context, projectIDs []string) ([]domain.Pipeline, error)
 	GetLatestPipelines(ctx context.Context) ([]domain.Pipeline, error)
+	GroupPipelinesByWorkflow(pipelines []domain.Pipeline) map[string][]domain.Pipeline
+	GetPipelinesByWorkflow(ctx context.Context, projectID, workflowID string, limit int) ([]domain.Pipeline, error)
 }
 
 // NewHandler creates a new Handler with injected dependencies (Dependency Inversion Principle).
@@ -44,6 +46,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/", h.handleIndex)
 	mux.HandleFunc("/api/health", h.handleHealth)
 	mux.HandleFunc("/pipelines", h.handlePipelines)
+	mux.HandleFunc("/pipelines/grouped", h.handlePipelinesGrouped)
+	mux.HandleFunc("/pipelines/workflow", h.handleWorkflowRuns)
 	mux.HandleFunc("/api/pipelines", h.handlePipelinesAPI)
 }
 
@@ -100,6 +104,53 @@ func (h *Handler) handlePipelinesAPI(w http.ResponseWriter, r *http.Request) {
 
 	if err := h.renderer.RenderPipelinesJSON(w, pipelines); err != nil {
 		h.logger.Printf("failed to render pipelines JSON: %v", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+}
+
+// handlePipelinesGrouped serves pipelines grouped by workflow.
+func (h *Handler) handlePipelinesGrouped(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html")
+
+	pipelines, err := h.pipelineService.GetLatestPipelines(r.Context())
+	if err != nil {
+		h.logger.Printf("failed to get pipelines: %v", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	grouped := h.pipelineService.GroupPipelinesByWorkflow(pipelines)
+
+	if err := h.renderer.RenderPipelinesGrouped(w, grouped); err != nil {
+		h.logger.Printf("failed to render grouped pipelines: %v", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+}
+
+// handleWorkflowRuns serves runs for a specific workflow.
+// Query params: ?project=owner/repo&workflow=123
+func (h *Handler) handleWorkflowRuns(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html")
+
+	projectID := r.URL.Query().Get("project")
+	workflowID := r.URL.Query().Get("workflow")
+
+	if projectID == "" || workflowID == "" {
+		http.Error(w, "Missing project or workflow parameter", http.StatusBadRequest)
+		return
+	}
+
+	pipelines, err := h.pipelineService.GetPipelinesByWorkflow(r.Context(), projectID, workflowID, 50)
+	if err != nil {
+		h.logger.Printf("failed to get workflow runs: %v", err)
+		http.Error(w, "Workflow not found", http.StatusNotFound)
+		return
+	}
+
+	if err := h.renderer.RenderPipelines(w, pipelines); err != nil {
+		h.logger.Printf("failed to render workflow runs: %v", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
