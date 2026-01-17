@@ -1,0 +1,169 @@
+package dashboard
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"strings"
+
+	"github.com/vilaca/ci-dashboard/internal/domain"
+)
+
+// Renderer handles rendering responses to HTTP clients.
+// This interface follows Interface Segregation Principle (SOLID-I).
+type Renderer interface {
+	RenderIndex(w io.Writer) error
+	RenderHealth(w io.Writer) error
+	RenderPipelines(w io.Writer, pipelines []domain.Pipeline) error
+	RenderPipelinesJSON(w io.Writer, pipelines []domain.Pipeline) error
+}
+
+// HTMLRenderer implements Renderer for HTML responses.
+type HTMLRenderer struct {
+	// All HTML is embedded in methods, no external templates needed
+}
+
+// NewHTMLRenderer creates a new HTML renderer.
+func NewHTMLRenderer() *HTMLRenderer {
+	return &HTMLRenderer{}
+}
+
+func (r *HTMLRenderer) RenderIndex(w io.Writer) error {
+	_, err := w.Write([]byte(`<!DOCTYPE html>
+<html>
+<head>
+	<title>CI Dashboard</title>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<style>
+		body { font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 20px; background: #f5f5f5; }
+		.container { max-width: 1200px; margin: 0 auto; }
+		h1 { color: #333; }
+		.card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 20px; }
+		.nav { margin-bottom: 30px; }
+		.nav a { color: #0066cc; text-decoration: none; margin-right: 20px; }
+		.nav a:hover { text-decoration: underline; }
+	</style>
+</head>
+<body>
+	<div class="container">
+		<h1>CI Dashboard</h1>
+		<div class="nav">
+			<a href="/">Home</a>
+			<a href="/pipelines">Pipelines</a>
+			<a href="/api/pipelines">API (JSON)</a>
+		</div>
+		<div class="card">
+			<h2>Welcome</h2>
+			<p>Monitor your CI/CD pipelines from GitLab and GitHub in one place.</p>
+			<p><a href="/pipelines">View Pipelines →</a></p>
+		</div>
+	</div>
+</body>
+</html>`))
+	return err
+}
+
+func (r *HTMLRenderer) RenderHealth(w io.Writer) error {
+	_, err := w.Write([]byte(`{"status":"ok"}`))
+	return err
+}
+
+func (r *HTMLRenderer) RenderPipelines(w io.Writer, pipelines []domain.Pipeline) error {
+	html := r.buildPipelinesHTML(pipelines)
+	_, err := w.Write([]byte(html))
+	return err
+}
+
+func (r *HTMLRenderer) RenderPipelinesJSON(w io.Writer, pipelines []domain.Pipeline) error {
+	return json.NewEncoder(w).Encode(map[string]interface{}{
+		"pipelines": pipelines,
+		"count":     len(pipelines),
+	})
+}
+
+// buildPipelinesHTML constructs the HTML for displaying pipelines.
+// Follows SLAP - operates at single level of abstraction.
+func (r *HTMLRenderer) buildPipelinesHTML(pipelines []domain.Pipeline) string {
+	var sb strings.Builder
+
+	sb.WriteString(`<!DOCTYPE html>
+<html>
+<head>
+	<title>Pipelines - CI Dashboard</title>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<style>
+		body { font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 20px; background: #f5f5f5; }
+		.container { max-width: 1200px; margin: 0 auto; }
+		h1 { color: #333; }
+		.nav { margin-bottom: 30px; }
+		.nav a { color: #0066cc; text-decoration: none; margin-right: 20px; }
+		.nav a:hover { text-decoration: underline; }
+		.pipeline { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 15px; }
+		.pipeline-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+		.pipeline-title { font-size: 18px; font-weight: 600; color: #333; }
+		.status { padding: 6px 12px; border-radius: 4px; font-size: 14px; font-weight: 500; }
+		.status-success { background: #d4edda; color: #155724; }
+		.status-failed { background: #f8d7da; color: #721c24; }
+		.status-running { background: #d1ecf1; color: #0c5460; }
+		.status-pending { background: #fff3cd; color: #856404; }
+		.status-canceled { background: #e2e3e5; color: #383d41; }
+		.pipeline-info { color: #666; font-size: 14px; }
+		.pipeline-link { color: #0066cc; text-decoration: none; }
+		.pipeline-link:hover { text-decoration: underline; }
+		.empty { text-align: center; padding: 40px; color: #666; }
+		.refresh { margin-bottom: 20px; }
+		.refresh button { padding: 10px 20px; background: #0066cc; color: white; border: none; border-radius: 4px; cursor: pointer; }
+		.refresh button:hover { background: #0052a3; }
+	</style>
+</head>
+<body>
+	<div class="container">
+		<h1>CI/CD Pipelines</h1>
+		<div class="nav">
+			<a href="/">Home</a>
+			<a href="/pipelines">Pipelines</a>
+			<a href="/api/pipelines">API (JSON)</a>
+		</div>
+		<div class="refresh">
+			<button onclick="location.reload()">Refresh</button>
+		</div>
+`)
+
+	if len(pipelines) == 0 {
+		sb.WriteString(`		<div class="pipeline">
+			<div class="empty">No pipelines found. Configure GITLAB_TOKEN or GITHUB_TOKEN environment variables.</div>
+		</div>
+`)
+	} else {
+		for _, p := range pipelines {
+			r.writePipelineCard(&sb, p)
+		}
+	}
+
+	sb.WriteString(`	</div>
+</body>
+</html>`)
+
+	return sb.String()
+}
+
+// writePipelineCard writes a single pipeline card to the string builder.
+func (r *HTMLRenderer) writePipelineCard(sb *strings.Builder, p domain.Pipeline) {
+	statusClass := fmt.Sprintf("status status-%s", p.Status)
+
+	sb.WriteString(fmt.Sprintf(`		<div class="pipeline">
+			<div class="pipeline-header">
+				<div class="pipeline-title">%s</div>
+				<span class="%s">%s</span>
+			</div>
+			<div class="pipeline-info">
+				<strong>Branch:</strong> %s<br>
+				<strong>Created:</strong> %s<br>
+				<a href="%s" target="_blank" class="pipeline-link">View Pipeline →</a>
+			</div>
+		</div>
+`, p.Repository, statusClass, strings.ToUpper(string(p.Status)), p.Branch, p.CreatedAt.Format("2006-01-02 15:04:05"), p.WebURL))
+}
+
