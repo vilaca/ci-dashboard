@@ -47,31 +47,66 @@ A dashboard for monitoring CI/CD pipelines from GitLab and GitHub in one unified
 
 #### GitHub Personal Access Token (Read-Only)
 
+**⚠️ Note**: GitHub classic tokens don't offer true read-only access. We recommend using **Fine-grained tokens** for better security.
+
+##### Option 1: Fine-grained Personal Access Tokens (RECOMMENDED - True Read-Only)
+
+1. Log in to GitHub (https://github.com)
+2. Click on your avatar in the top-right corner
+3. Select **Settings** → **Developer settings** → **Personal access tokens** → **Fine-grained tokens**
+4. Click **Generate new token**
+5. Fill in the token details:
+   - **Token name**: `ci-dashboard-readonly`
+   - **Expiration**: 90 days or less (recommended)
+   - **Repository access**: Choose based on your needs:
+     - **Public Repositories (read-only)**: Select "Public Repositories (read-only)"
+     - **All repositories** or **Only select repositories**: Choose specific repos
+   - **Permissions**: Under "Repository permissions", set:
+     - ✅ **Actions**: `Read-only` (to view workflow runs)
+     - ✅ **Contents**: `Read-only` (to view repositories)
+     - ✅ **Metadata**: `Read-only` (automatically selected)
+     - ❌ All other permissions: `No access` (leave unselected)
+6. Click **Generate token**
+7. Copy the token immediately (you won't be able to see it again)
+8. The token will look like: `github_pat_xxxxxxxxxxxxxxxxxxxx`
+
+**Benefits of Fine-grained tokens:**
+- ✅ True read-only access (no write permissions)
+- ✅ Granular control over repositories
+- ✅ More secure than classic tokens
+- ✅ Better audit trail
+
+##### Option 2: Classic Personal Access Tokens (Legacy - Not Truly Read-Only)
+
+⚠️ **Warning**: Classic tokens with `repo` or `public_repo` scopes also grant write access. Use fine-grained tokens instead for true read-only access.
+
+If you must use classic tokens:
+
 1. Log in to GitHub (https://github.com)
 2. Click on your avatar in the top-right corner
 3. Select **Settings** → **Developer settings** → **Personal access tokens** → **Tokens (classic)**
 4. Click **Generate new token** → **Generate new token (classic)**
 5. Fill in the token details:
-   - **Note**: `ci-dashboard-readonly` (or any description)
+   - **Note**: `ci-dashboard-readonly` (though not truly read-only)
    - **Expiration**: Set according to your security policy (recommended: 90 days or less)
    - **Select scopes**: Choose based on your repository visibility:
-     - **For public repositories only**: ✅ `public_repo` (read-only access to public repos)
-     - **For private repositories**: ✅ `repo` (unfortunately GitHub doesn't offer read-only for private repos)
+     - **For public repositories only**: ✅ `public_repo` (⚠️ also grants write access)
+     - **For private repositories**: ✅ `repo` (⚠️ also grants write access)
      - ❌ Do NOT select `workflow`, `write:packages`, `delete:packages`, or any admin scopes
 6. Click **Generate token**
 7. Copy the token immediately (you won't be able to see it again)
 8. The token will look like: `ghp_xxxxxxxxxxxxxxxxxxxx`
 
-**Required Scopes (Read-Only):**
-- ✅ `public_repo` - Read-only access to public repositories and Actions (RECOMMENDED for public repos)
-- OR ✅ `repo` - Access to private repositories (grants more than read-only, but required for private repos)
+**Classic Token Scopes:**
+- ⚠️ `public_repo` - Access to public repositories (includes write)
+- OR ⚠️ `repo` - Access to private repositories (includes write)
 
 **DO NOT grant:**
-- ❌ `workflow` - Allows modifying workflows (NOT needed for read-only)
-- ❌ `write:packages` - Gives write access
-- ❌ `delete:packages` - Gives delete access
-- ❌ `admin:*` - Gives admin access
-- ❌ Any other write/delete/admin scopes
+- ❌ `workflow` - Workflow modification
+- ❌ `write:packages` - Package write access
+- ❌ `delete:packages` - Package deletion
+- ❌ `admin:*` - Administrative access
+- ❌ Any other scopes
 
 **Security Notes:**
 - ✅ This dashboard ONLY reads data - no write operations are performed

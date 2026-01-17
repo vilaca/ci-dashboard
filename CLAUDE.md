@@ -342,4 +342,6 @@ WATCHED_REPOS=owner/repo1,owner/repo2        # GitHub repos
 
 **Security: Token Scopes (Read-Only)**
 - GitLab: Use `read_api` scope ONLY (never `api`, `write_repository`, or admin scopes)
-- GitHub: Use `public_repo` (for public repos) or `repo` (for private repos) - never `workflow`, `write:*`, `delete:*`, or `admin:*`
+- GitHub: RECOMMENDED - Use fine-grained tokens with Actions:Read and Contents:Read permissions
+  - Legacy classic tokens: Use `public_repo` or `repo` (⚠️ these also grant write access)
+  - Never grant `workflow`, `write:*`, `delete:*`, or `admin:*`
