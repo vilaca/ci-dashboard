@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A web-based dashboard for monitoring CI/CD pipelines across multiple platforms. Built with Go, using the standard library HTTP server.
 
+**⚠️ IMPORTANT: This is a READ-ONLY monitoring dashboard. It NEVER writes, modifies, or deletes data in GitLab or GitHub. All API operations are read-only.**
+
 ## Development Commands
 
 The project uses a Makefile for common tasks:
@@ -325,15 +327,19 @@ Module path: `github.com/vilaca/ci-dashboard`
 # Server
 PORT=8080                                    # HTTP server port
 
-# GitLab
+# GitLab (READ-ONLY access)
 GITLAB_URL=https://gitlab.com                # GitLab instance URL
-GITLAB_TOKEN=glpat-xxxxxxxxxxxx             # GitLab personal access token
+GITLAB_TOKEN=glpat-xxxxxxxxxxxx             # GitLab personal access token with read_api scope ONLY
 
-# GitHub
+# GitHub (READ-ONLY access)
 GITHUB_URL=https://api.github.com            # GitHub API URL
-GITHUB_TOKEN=ghp_xxxxxxxxxxxx               # GitHub personal access token
+GITHUB_TOKEN=ghp_xxxxxxxxxxxx               # GitHub personal access token with public_repo or repo scope
 
 # Optional: Specific repos to watch (otherwise shows all)
 WATCHED_REPOS=123,456                        # GitLab project IDs
 WATCHED_REPOS=owner/repo1,owner/repo2        # GitHub repos
 ```
+
+**Security: Token Scopes (Read-Only)**
+- GitLab: Use `read_api` scope ONLY (never `api`, `write_repository`, or admin scopes)
+- GitHub: Use `public_repo` (for public repos) or `repo` (for private repos) - never `workflow`, `write:*`, `delete:*`, or `admin:*`

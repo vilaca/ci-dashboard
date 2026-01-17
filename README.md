@@ -20,48 +20,68 @@ A dashboard for monitoring CI/CD pipelines from GitLab and GitHub in one unified
 
 ### Creating Access Tokens
 
-#### GitLab Personal Access Token
+**⚠️ IMPORTANT: This dashboard only requires READ-ONLY access. Never grant write permissions.**
+
+#### GitLab Personal Access Token (Read-Only)
 
 1. Log in to your GitLab instance (e.g., https://gitlab.com)
 2. Click on your avatar in the top-right corner
 3. Select **Settings** → **Access Tokens**
 4. Fill in the token details:
-   - **Token name**: `ci-dashboard` (or any name you prefer)
-   - **Expiration date**: Set according to your security policy
-   - **Select scopes**: Check `read_api` (read-only access to API)
+   - **Token name**: `ci-dashboard-readonly` (or any name you prefer)
+   - **Expiration date**: Set according to your security policy (recommended: 90 days or less)
+   - **Select scopes**: Check **ONLY** `read_api`
+     - ✅ `read_api` - Read-only access to API
+     - ❌ Do NOT select any other scopes (write, admin, etc.)
 5. Click **Create personal access token**
 6. Copy the token immediately (you won't be able to see it again)
 7. The token will look like: `glpat-xxxxxxxxxxxxxxxxxxxx`
 
-**Required Scope:**
-- `read_api` - Read-only access to repositories and pipelines
+**Required Scope (Read-Only):**
+- ✅ `read_api` - Grants read-only access to repositories and pipelines
 
-#### GitHub Personal Access Token
+**DO NOT grant:**
+- ❌ `api` - Gives write access
+- ❌ `write_repository` - Gives write access to repositories
+- ❌ Any other scopes
+
+#### GitHub Personal Access Token (Read-Only)
 
 1. Log in to GitHub (https://github.com)
 2. Click on your avatar in the top-right corner
 3. Select **Settings** → **Developer settings** → **Personal access tokens** → **Tokens (classic)**
 4. Click **Generate new token** → **Generate new token (classic)**
 5. Fill in the token details:
-   - **Note**: `ci-dashboard` (or any description)
-   - **Expiration**: Set according to your security policy
-   - **Select scopes**: Check the following:
-     - `repo` - Full control of private repositories (or `public_repo` for public repos only)
-     - `workflow` - Update GitHub Action workflows
+   - **Note**: `ci-dashboard-readonly` (or any description)
+   - **Expiration**: Set according to your security policy (recommended: 90 days or less)
+   - **Select scopes**: Choose based on your repository visibility:
+     - **For public repositories only**: ✅ `public_repo` (read-only access to public repos)
+     - **For private repositories**: ✅ `repo` (unfortunately GitHub doesn't offer read-only for private repos)
+     - ❌ Do NOT select `workflow`, `write:packages`, `delete:packages`, or any admin scopes
 6. Click **Generate token**
 7. Copy the token immediately (you won't be able to see it again)
 8. The token will look like: `ghp_xxxxxxxxxxxxxxxxxxxx`
 
-**Required Scopes:**
-- `repo` - Access to repositories and workflow runs
-- `workflow` - Access to GitHub Actions
+**Required Scopes (Read-Only):**
+- ✅ `public_repo` - Read-only access to public repositories and Actions (RECOMMENDED for public repos)
+- OR ✅ `repo` - Access to private repositories (grants more than read-only, but required for private repos)
+
+**DO NOT grant:**
+- ❌ `workflow` - Allows modifying workflows (NOT needed for read-only)
+- ❌ `write:packages` - Gives write access
+- ❌ `delete:packages` - Gives delete access
+- ❌ `admin:*` - Gives admin access
+- ❌ Any other write/delete/admin scopes
 
 **Security Notes:**
-- Store tokens securely (never commit them to version control)
-- Use environment variables or secret management tools
-- Set reasonable expiration dates
-- Use minimum required scopes
-- Rotate tokens periodically
+- ✅ This dashboard ONLY reads data - no write operations are performed
+- ✅ Use the minimum required scopes (principle of least privilege)
+- ✅ Store tokens securely (never commit them to version control)
+- ✅ Use environment variables or secret management tools
+- ✅ Set expiration dates (90 days or less recommended)
+- ✅ Rotate tokens periodically
+- ✅ Revoke tokens immediately if compromised
+- ⚠️ Monitor token usage in platform audit logs
 
 ### Configuration
 
