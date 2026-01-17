@@ -122,11 +122,6 @@ func (c *Client) doRequest(ctx context.Context, url string, result interface{}) 
 func (c *Client) convertProjects(ghRepos []githubRepository) []domain.Project {
 	projects := make([]domain.Project, 0, len(ghRepos))
 	for _, repo := range ghRepos {
-		// Only include repos with Actions enabled
-		if !repo.HasActions {
-			continue
-		}
-
 		projects = append(projects, domain.Project{
 			ID:       repo.FullName,
 			Name:     repo.Name,
@@ -185,11 +180,10 @@ func convertStatus(status, conclusion string) domain.Status {
 
 // GitHub API response types
 type githubRepository struct {
-	ID         int    `json:"id"`
-	Name       string `json:"name"`
-	FullName   string `json:"full_name"`
-	HTMLURL    string `json:"html_url"`
-	HasActions bool   `json:"has_actions"`
+	ID       int    `json:"id"`
+	Name     string `json:"name"`
+	FullName string `json:"full_name"`
+	HTMLURL  string `json:"html_url"`
 }
 
 type githubWorkflowRunsResponse struct {
