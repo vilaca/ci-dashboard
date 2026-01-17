@@ -37,13 +37,35 @@ func (r *HTMLRenderer) RenderIndex(w io.Writer) error {
 	<meta charset="UTF-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
 	<style>
-		body { font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 20px; background: #f5f5f5; }
+		:root {
+			--bg-primary: #f5f5f5;
+			--bg-secondary: white;
+			--text-primary: #333;
+			--text-secondary: #666;
+			--link-color: #0066cc;
+			--border-color: #e0e0e0;
+			--shadow: rgba(0,0,0,0.1);
+		}
+		[data-theme="dark"] {
+			--bg-primary: #1a1a1a;
+			--bg-secondary: #2d2d2d;
+			--text-primary: #e0e0e0;
+			--text-secondary: #b0b0b0;
+			--link-color: #4d9fff;
+			--border-color: #404040;
+			--shadow: rgba(0,0,0,0.3);
+		}
+		body { font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 20px; background: var(--bg-primary); color: var(--text-primary); transition: background-color 0.3s, color 0.3s; }
 		.container { max-width: 1200px; margin: 0 auto; }
-		h1 { color: #333; }
-		.card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 20px; }
-		.nav { margin-bottom: 30px; }
-		.nav a { color: #0066cc; text-decoration: none; margin-right: 20px; }
+		h1 { color: var(--text-primary); }
+		h2 { color: var(--text-primary); }
+		p { color: var(--text-secondary); }
+		.card { background: var(--bg-secondary); padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px var(--shadow); margin-bottom: 20px; transition: background-color 0.3s; }
+		.nav { margin-bottom: 30px; display: flex; align-items: center; gap: 20px; }
+		.nav a { color: var(--link-color); text-decoration: none; }
 		.nav a:hover { text-decoration: underline; }
+		.theme-toggle { background: var(--bg-secondary); border: 1px solid var(--border-color); padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 14px; color: var(--text-primary); transition: background-color 0.3s; }
+		.theme-toggle:hover { opacity: 0.8; }
 	</style>
 </head>
 <body>
@@ -52,7 +74,9 @@ func (r *HTMLRenderer) RenderIndex(w io.Writer) error {
 		<div class="nav">
 			<a href="/">Home</a>
 			<a href="/pipelines">Pipelines</a>
+			<a href="/pipelines/grouped">Grouped</a>
 			<a href="/api/pipelines">API (JSON)</a>
+			<button class="theme-toggle" onclick="toggleTheme()">🌙 Dark Mode</button>
 		</div>
 		<div class="card">
 			<h2>Welcome</h2>
@@ -60,6 +84,26 @@ func (r *HTMLRenderer) RenderIndex(w io.Writer) error {
 			<p><a href="/pipelines">View Pipelines →</a></p>
 		</div>
 	</div>
+	<script>
+		function toggleTheme() {
+			const html = document.documentElement;
+			const currentTheme = html.getAttribute('data-theme');
+			const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+			html.setAttribute('data-theme', newTheme);
+			localStorage.setItem('theme', newTheme);
+			updateToggleButton(newTheme);
+		}
+		function updateToggleButton(theme) {
+			const btn = document.querySelector('.theme-toggle');
+			btn.textContent = theme === 'dark' ? '☀️ Light Mode' : '🌙 Dark Mode';
+		}
+		// Load saved theme on page load
+		(function() {
+			const savedTheme = localStorage.getItem('theme') || 'light';
+			document.documentElement.setAttribute('data-theme', savedTheme);
+			updateToggleButton(savedTheme);
+		})();
+	</script>
 </body>
 </html>`))
 	return err
@@ -95,29 +139,51 @@ func (r *HTMLRenderer) buildPipelinesHTML(pipelines []domain.Pipeline) string {
 	<meta charset="UTF-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
 	<style>
-		body { font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 20px; background: #f5f5f5; }
+		:root {
+			--bg-primary: #f5f5f5;
+			--bg-secondary: white;
+			--text-primary: #333;
+			--text-secondary: #666;
+			--link-color: #0066cc;
+			--button-bg: #0066cc;
+			--button-hover: #0052a3;
+			--border-color: #e0e0e0;
+			--shadow: rgba(0,0,0,0.1);
+		}
+		[data-theme="dark"] {
+			--bg-primary: #1a1a1a;
+			--bg-secondary: #2d2d2d;
+			--text-primary: #e0e0e0;
+			--text-secondary: #b0b0b0;
+			--link-color: #4d9fff;
+			--button-bg: #4d9fff;
+			--button-hover: #3d89ef;
+			--border-color: #404040;
+			--shadow: rgba(0,0,0,0.3);
+		}
+		body { font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 20px; background: var(--bg-primary); color: var(--text-primary); transition: background-color 0.3s, color 0.3s; }
 		.container { max-width: 1200px; margin: 0 auto; }
-		h1 { color: #333; }
-		.nav { margin-bottom: 30px; }
-		.nav a { color: #0066cc; text-decoration: none; margin-right: 20px; }
+		h1 { color: var(--text-primary); }
+		.nav { margin-bottom: 30px; display: flex; align-items: center; gap: 15px; flex-wrap: wrap; }
+		.nav a { color: var(--link-color); text-decoration: none; }
 		.nav a:hover { text-decoration: underline; }
-		.pipeline { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 15px; }
+		.pipeline { background: var(--bg-secondary); padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px var(--shadow); margin-bottom: 15px; transition: background-color 0.3s; }
 		.pipeline-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
-		.pipeline-title { font-size: 18px; font-weight: 600; color: #333; }
+		.pipeline-title { font-size: 18px; font-weight: 600; color: var(--text-primary); }
 		.status { padding: 6px 12px; border-radius: 4px; font-size: 14px; font-weight: 500; }
 		.status-success { background: #d4edda; color: #155724; }
 		.status-failed { background: #f8d7da; color: #721c24; }
 		.status-running { background: #d1ecf1; color: #0c5460; }
 		.status-pending { background: #fff3cd; color: #856404; }
 		.status-canceled { background: #e2e3e5; color: #383d41; }
-		.pipeline-info { color: #666; font-size: 14px; }
-		.pipeline-link { color: #0066cc; text-decoration: none; }
+		.pipeline-info { color: var(--text-secondary); font-size: 14px; }
+		.pipeline-link { color: var(--link-color); text-decoration: none; }
 		.pipeline-link:hover { text-decoration: underline; }
-		.pipeline-subtitle { font-size: 14px; color: #666; font-weight: 400; margin-top: 4px; }
-		.empty { text-align: center; padding: 40px; color: #666; }
+		.pipeline-subtitle { font-size: 14px; color: var(--text-secondary); font-weight: 400; margin-top: 4px; }
+		.empty { text-align: center; padding: 40px; color: var(--text-secondary); }
 		.refresh { margin-bottom: 20px; }
-		.refresh button { padding: 10px 20px; background: #0066cc; color: white; border: none; border-radius: 4px; cursor: pointer; }
-		.refresh button:hover { background: #0052a3; }
+		.refresh button, .theme-toggle { padding: 8px 16px; background: var(--button-bg); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; transition: background-color 0.3s; }
+		.refresh button:hover, .theme-toggle:hover { background: var(--button-hover); }
 	</style>
 </head>
 <body>
@@ -125,8 +191,10 @@ func (r *HTMLRenderer) buildPipelinesHTML(pipelines []domain.Pipeline) string {
 		<h1>CI/CD Pipelines</h1>
 		<div class="nav">
 			<a href="/">Home</a>
-			<a href="/pipelines">Pipelines</a>
+			<a href="/pipelines">All Pipelines</a>
+			<a href="/pipelines/grouped">Grouped</a>
 			<a href="/api/pipelines">API (JSON)</a>
+			<button class="theme-toggle" onclick="toggleTheme()">🌙 Dark Mode</button>
 		</div>
 		<div class="refresh">
 			<button onclick="location.reload()">Refresh</button>
@@ -145,6 +213,25 @@ func (r *HTMLRenderer) buildPipelinesHTML(pipelines []domain.Pipeline) string {
 	}
 
 	sb.WriteString(`	</div>
+	<script>
+		function toggleTheme() {
+			const html = document.documentElement;
+			const currentTheme = html.getAttribute('data-theme');
+			const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+			html.setAttribute('data-theme', newTheme);
+			localStorage.setItem('theme', newTheme);
+			updateToggleButton(newTheme);
+		}
+		function updateToggleButton(theme) {
+			const btn = document.querySelector('.theme-toggle');
+			btn.textContent = theme === 'dark' ? '☀️ Light Mode' : '🌙 Dark Mode';
+		}
+		(function() {
+			const savedTheme = localStorage.getItem('theme') || 'light';
+			document.documentElement.setAttribute('data-theme', savedTheme);
+			updateToggleButton(savedTheme);
+		})();
+	</script>
 </body>
 </html>`)
 
@@ -192,33 +279,57 @@ func (r *HTMLRenderer) RenderPipelinesGrouped(w io.Writer, pipelinesByWorkflow m
 	<meta charset="UTF-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
 	<style>
-		body { font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 20px; background: #f5f5f5; }
+		:root {
+			--bg-primary: #f5f5f5;
+			--bg-secondary: white;
+			--text-primary: #333;
+			--text-secondary: #666;
+			--link-color: #0066cc;
+			--button-bg: #0066cc;
+			--button-hover: #0052a3;
+			--border-color: #e0e0e0;
+			--shadow: rgba(0,0,0,0.1);
+		}
+		[data-theme="dark"] {
+			--bg-primary: #1a1a1a;
+			--bg-secondary: #2d2d2d;
+			--text-primary: #e0e0e0;
+			--text-secondary: #b0b0b0;
+			--link-color: #4d9fff;
+			--button-bg: #4d9fff;
+			--button-hover: #3d89ef;
+			--border-color: #404040;
+			--shadow: rgba(0,0,0,0.3);
+		}
+		body { font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 20px; background: var(--bg-primary); color: var(--text-primary); transition: background-color 0.3s, color 0.3s; }
 		.container { max-width: 1200px; margin: 0 auto; }
-		h1 { color: #333; }
-		.nav { margin-bottom: 30px; }
-		.nav a { color: #0066cc; text-decoration: none; margin-right: 20px; }
+		h1 { color: var(--text-primary); }
+		.nav { margin-bottom: 30px; display: flex; align-items: center; gap: 15px; flex-wrap: wrap; }
+		.nav a { color: var(--link-color); text-decoration: none; }
 		.nav a:hover { text-decoration: underline; }
-		.pipeline { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 15px; }
+		.theme-toggle { padding: 8px 16px; background: var(--button-bg); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; transition: background-color 0.3s; }
+		.theme-toggle:hover { background: var(--button-hover); }
+		.pipeline { background: var(--bg-secondary); padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px var(--shadow); margin-bottom: 15px; transition: background-color 0.3s; }
 		.pipeline-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
-		.pipeline-title { font-size: 18px; font-weight: 600; color: #333; }
+		.pipeline-title { font-size: 18px; font-weight: 600; color: var(--text-primary); }
 		.status { padding: 6px 12px; border-radius: 4px; font-size: 14px; font-weight: 500; }
 		.status-success { background: #d4edda; color: #155724; }
 		.status-failed { background: #f8d7da; color: #721c24; }
 		.status-running { background: #d1ecf1; color: #0c5460; }
 		.status-pending { background: #fff3cd; color: #856404; }
 		.status-canceled { background: #e2e3e5; color: #383d41; }
-		.pipeline-info { color: #666; font-size: 14px; }
-		.pipeline-link { color: #0066cc; text-decoration: none; }
+		.pipeline-info { color: var(--text-secondary); font-size: 14px; }
+		.pipeline-link { color: var(--link-color); text-decoration: none; }
 		.pipeline-link:hover { text-decoration: underline; }
-		.pipeline-subtitle { font-size: 14px; color: #666; font-weight: 400; margin-top: 4px; }
+		.pipeline-subtitle { font-size: 14px; color: var(--text-secondary); font-weight: 400; margin-top: 4px; }
 		.workflow-group { margin-bottom: 30px; }
 		.workflow-group-header {
 			font-size: 20px;
 			font-weight: 600;
-			color: #333;
+			color: var(--text-primary);
 			margin-bottom: 15px;
 			padding-bottom: 10px;
-			border-bottom: 2px solid #e0e0e0;
+			border-bottom: 2px solid var(--border-color);
 		}
 	</style>
 </head>
@@ -228,7 +339,9 @@ func (r *HTMLRenderer) RenderPipelinesGrouped(w io.Writer, pipelinesByWorkflow m
 		<div class="nav">
 			<a href="/">Home</a>
 			<a href="/pipelines">All Pipelines</a>
-			<a href="/pipelines/grouped">Grouped by Workflow</a>
+			<a href="/pipelines/grouped">Grouped</a>
+			<a href="/api/pipelines">API (JSON)</a>
+			<button class="theme-toggle" onclick="toggleTheme()">🌙 Dark Mode</button>
 		</div>
 `)
 
@@ -284,6 +397,25 @@ func (r *HTMLRenderer) RenderPipelinesGrouped(w io.Writer, pipelinesByWorkflow m
 	}
 
 	sb.WriteString(`	</div>
+	<script>
+		function toggleTheme() {
+			const html = document.documentElement;
+			const currentTheme = html.getAttribute('data-theme');
+			const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+			html.setAttribute('data-theme', newTheme);
+			localStorage.setItem('theme', newTheme);
+			updateToggleButton(newTheme);
+		}
+		function updateToggleButton(theme) {
+			const btn = document.querySelector('.theme-toggle');
+			btn.textContent = theme === 'dark' ? '☀️ Light Mode' : '🌙 Dark Mode';
+		}
+		(function() {
+			const savedTheme = localStorage.getItem('theme') || 'light';
+			document.documentElement.setAttribute('data-theme', savedTheme);
+			updateToggleButton(savedTheme);
+		})();
+	</script>
 </body>
 </html>`)
 
