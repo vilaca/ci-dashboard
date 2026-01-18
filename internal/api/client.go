@@ -30,6 +30,19 @@ type WorkflowClient interface {
 	GetWorkflowRuns(ctx context.Context, projectID string, workflowID string, limit int) ([]domain.Pipeline, error)
 }
 
+// ExtendedClient extends Client with merge request and issue operations.
+// Both GitLab and GitHub implement this.
+// Follows Interface Segregation Principle.
+type ExtendedClient interface {
+	Client
+
+	// GetMergeRequests returns open merge requests (PRs) for a project.
+	GetMergeRequests(ctx context.Context, projectID string) ([]domain.MergeRequest, error)
+
+	// GetIssues returns open issues for a project.
+	GetIssues(ctx context.Context, projectID string) ([]domain.Issue, error)
+}
+
 // ClientConfig holds common configuration for API clients.
 type ClientConfig struct {
 	BaseURL string

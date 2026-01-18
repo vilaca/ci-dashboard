@@ -9,6 +9,9 @@
 *.dylib
 bin/
 
+# Built binary (project-specific)
+ci-dashboard
+
 # Test binary, built with `go test -c`
 *.test
 
@@ -32,3 +35,6 @@ go.work.sum
 # .idea/
 # .vscode/
 tmp/
+
+# Personal notes and TODOs
+TODO.md

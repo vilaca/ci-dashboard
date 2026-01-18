@@ -1,0 +1,64 @@
+# CI Dashboard Configuration Example
+# Copy this file to config.yaml and customize it for your needs
+# Environment variables take precedence over values in this file
+
+# Server port (default: 8080)
+# Environment variable: PORT
+port: 8080
+
+# GitLab Configuration
+gitlab:
+  # GitLab instance URL (default: https://gitlab.com)
+  # Environment variable: GITLAB_URL
+  url: https://gitlab.com
+
+  # GitLab personal access token
+  # Required for GitLab integration
+  # Environment variable: GITLAB_TOKEN (recommended)
+  token: ""
+
+  # Optional: List of specific repositories to watch
+  # If not specified, all accessible repositories will be monitored
+  # Environment variable: GITLAB_WATCHED_REPOS (comma-separated)
+  watched_repos:
+    - "123"      # GitLab project ID
+    - "456"      # GitLab project ID
+
+  # Cache duration in seconds for GitLab API responses (default: 300 = 5 minutes)
+  # Set to 0 to disable caching
+  # Environment variable: GITLAB_CACHE_DURATION_SECONDS
+  cache_duration_seconds: 300
+
+# GitHub Configuration
+github:
+  # GitHub API URL (default: https://api.github.com)
+  # Environment variable: GITHUB_URL
+  url: https://api.github.com
+
+  # GitHub personal access token
+  # Required for GitHub integration
+  # Environment variable: GITHUB_TOKEN (recommended)
+  token: ""
+
+  # Optional: List of specific repositories to watch
+  # If not specified, all accessible repositories will be monitored
+  # Environment variable: GITHUB_WATCHED_REPOS (comma-separated)
+  watched_repos:
+    - "facebook/react"
+    - "golang/go"
+
+  # Cache duration in seconds for GitHub API responses (default: 300 = 5 minutes)
+  # Set to 0 to disable caching
+  # Recommended: 300-600 to avoid rate limiting (GitHub has 5000 requests/hour with token)
+  # Environment variable: GITHUB_CACHE_DURATION_SECONDS
+  cache_duration_seconds: 300
+
+# Display Configuration
+display:
+  # Number of recent pipeline runs to show per repository (default: 3)
+  # Environment variable: RUNS_PER_REPOSITORY
+  runs_per_repository: 3
+
+  # Total number of recent pipelines to show in recent pipelines view (default: 50)
+  # Environment variable: RECENT_PIPELINES_LIMIT
+  recent_pipelines_limit: 50

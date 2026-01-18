@@ -177,3 +177,117 @@ type gitlabPipeline struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
+
+// GetMergeRequests retrieves open merge requests for a project.
+func (c *Client) GetMergeRequests(ctx context.Context, projectID string) ([]domain.MergeRequest, error) {
+	url := fmt.Sprintf("%s/api/v4/projects/%s/merge_requests?state=opened&per_page=50", c.baseURL, projectID)
+
+	var glMRs []gitlabMergeRequest
+	if err := c.doRequest(ctx, url, &glMRs); err != nil {
+		return nil, fmt.Errorf("failed to get merge requests: %w", err)
+	}
+
+	mrs := make([]domain.MergeRequest, len(glMRs))
+	for i, glMR := range glMRs {
+		mrs[i] = c.convertMergeRequest(glMR, projectID)
+	}
+
+	return mrs, nil
+}
+
+// GetIssues retrieves open issues for a project.
+func (c *Client) GetIssues(ctx context.Context, projectID string) ([]domain.Issue, error) {
+	url := fmt.Sprintf("%s/api/v4/projects/%s/issues?state=opened&per_page=50", c.baseURL, projectID)
+
+	var glIssues []gitlabIssue
+	if err := c.doRequest(ctx, url, &glIssues); err != nil {
+		return nil, fmt.Errorf("failed to get issues: %w", err)
+	}
+
+	issues := make([]domain.Issue, len(glIssues))
+	for i, glIssue := range glIssues {
+		issues[i] = c.convertIssue(glIssue, projectID)
+	}
+
+	return issues, nil
+}
+
+// convertMergeRequest converts GitLab MR to domain MergeRequest.
+func (c *Client) convertMergeRequest(glMR gitlabMergeRequest, projectID string) domain.MergeRequest {
+	return domain.MergeRequest{
+		ID:           fmt.Sprintf("%d", glMR.IID),
+		Number:       glMR.IID,
+		Title:        glMR.Title,
+		Description:  glMR.Description,
+		State:        glMR.State,
+		SourceBranch: glMR.SourceBranch,
+		TargetBranch: glMR.TargetBranch,
+		Author:       glMR.Author.Username,
+		CreatedAt:    glMR.CreatedAt,
+		UpdatedAt:    glMR.UpdatedAt,
+		WebURL:       glMR.WebURL,
+		ProjectID:    projectID,
+		Repository:   glMR.Title, // GitLab doesn't return repo name in MR, using title
+	}
+}
+
+// convertIssue converts GitLab issue to domain Issue.
+func (c *Client) convertIssue(glIssue gitlabIssue, projectID string) domain.Issue {
+	labels := make([]string, len(glIssue.Labels))
+	copy(labels, glIssue.Labels)
+
+	assignee := ""
+	if glIssue.Assignee != nil {
+		assignee = glIssue.Assignee.Username
+	}
+
+	return domain.Issue{
+		ID:          fmt.Sprintf("%d", glIssue.IID),
+		Number:      glIssue.IID,
+		Title:       glIssue.Title,
+		Description: glIssue.Description,
+		State:       glIssue.State,
+		Labels:      labels,
+		Author:      glIssue.Author.Username,
+		Assignee:    assignee,
+		CreatedAt:   glIssue.CreatedAt,
+		UpdatedAt:   glIssue.UpdatedAt,
+		WebURL:      glIssue.WebURL,
+		ProjectID:   projectID,
+		Repository:  glIssue.Title, // GitLab doesn't return repo name in issue, using title
+	}
+}
+
+// GitLab MergeRequest type
+type gitlabMergeRequest struct {
+	IID          int       `json:"iid"`
+	Title        string    `json:"title"`
+	Description  string    `json:"description"`
+	State        string    `json:"state"`
+	SourceBranch string    `json:"source_branch"`
+	TargetBranch string    `json:"target_branch"`
+	Author       gitlabUser `json:"author"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+	WebURL       string    `json:"web_url"`
+}
+
+// GitLab Issue type
+type gitlabIssue struct {
+	IID         int         `json:"iid"`
+	Title       string      `json:"title"`
+	Description string      `json:"description"`
+	State       string      `json:"state"`
+	Labels      []string    `json:"labels"`
+	Author      gitlabUser  `json:"author"`
+	Assignee    *gitlabUser `json:"assignee"`
+	CreatedAt   time.Time   `json:"created_at"`
+	UpdatedAt   time.Time   `json:"updated_at"`
+	WebURL      string      `json:"web_url"`
+}
+
+// GitLab User type
+type gitlabUser struct {
+	Username string `json:"username"`
+	Name     string `json:"name"`
+}

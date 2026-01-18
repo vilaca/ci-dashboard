@@ -33,6 +33,8 @@ type PipelineService interface {
 	GetPipelinesByWorkflow(ctx context.Context, projectID, workflowID string, limit int) ([]domain.Pipeline, error)
 	GetRepositoriesWithRecentRuns(ctx context.Context, runsPerRepo int) ([]RepositoryWithRuns, error)
 	GetRecentPipelines(ctx context.Context, totalLimit int) ([]domain.Pipeline, error)
+	GetAllMergeRequests(ctx context.Context) ([]domain.MergeRequest, error)
+	GetAllIssues(ctx context.Context) ([]domain.Issue, error)
 }
 
 // RepositoryWithRuns is imported from service package
@@ -57,9 +59,11 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/health", h.handleHealth)
 	mux.HandleFunc("/repository", h.handleRepositoryDetail)
 	mux.HandleFunc("/pipelines", h.handleRecentPipelines)
+	mux.HandleFunc("/pipelines/failed", h.handleFailedPipelines)
 	mux.HandleFunc("/pipelines/grouped", h.handlePipelinesGrouped)
 	mux.HandleFunc("/pipelines/workflow", h.handleWorkflowRuns)
-	mux.HandleFunc("/api/pipelines", h.handlePipelinesAPI)
+	mux.HandleFunc("/mrs", h.handleMergeRequests)
+	mux.HandleFunc("/issues", h.handleIssues)
 }
 
 // handleIndex serves the main dashboard page.
@@ -102,19 +106,28 @@ func (h *Handler) handlePipelines(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handlePipelinesAPI serves the pipelines API endpoint (JSON).
-func (h *Handler) handlePipelinesAPI(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
+// handleFailedPipelines serves only failed pipelines.
+func (h *Handler) handleFailedPipelines(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html")
 
-	pipelines, err := h.pipelineService.GetLatestPipelines(r.Context())
+	// Use GetRecentPipelines with larger limit to capture more history
+	pipelines, err := h.pipelineService.GetRecentPipelines(r.Context(), h.recentLimit*2)
 	if err != nil {
 		h.logger.Printf("failed to get pipelines: %v", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 
-	if err := h.renderer.RenderPipelinesJSON(w, pipelines); err != nil {
-		h.logger.Printf("failed to render pipelines JSON: %v", err)
+	// Filter for failed pipelines only
+	var failedPipelines []domain.Pipeline
+	for _, p := range pipelines {
+		if p.Status == domain.StatusFailed {
+			failedPipelines = append(failedPipelines, p)
+		}
+	}
+
+	if err := h.renderer.RenderFailedPipelines(w, failedPipelines); err != nil {
+		h.logger.Printf("failed to render failed pipelines: %v", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
@@ -218,7 +231,38 @@ func (h *Handler) handleRepositoryDetail(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if err := h.renderer.RenderRepositoryDetail(w, *repository); err != nil {
+	// Get MRs and Issues for this repository
+	allMRs, err := h.pipelineService.GetAllMergeRequests(r.Context())
+	if err != nil {
+		h.logger.Printf("failed to get merge requests: %v", err)
+		// Continue even if MRs fail
+		allMRs = []domain.MergeRequest{}
+	}
+
+	allIssues, err := h.pipelineService.GetAllIssues(r.Context())
+	if err != nil {
+		h.logger.Printf("failed to get issues: %v", err)
+		// Continue even if Issues fail
+		allIssues = []domain.Issue{}
+	}
+
+	// Filter MRs for this repository
+	var repoMRs []domain.MergeRequest
+	for _, mr := range allMRs {
+		if mr.ProjectID == repositoryID {
+			repoMRs = append(repoMRs, mr)
+		}
+	}
+
+	// Filter Issues for this repository
+	var repoIssues []domain.Issue
+	for _, issue := range allIssues {
+		if issue.ProjectID == repositoryID {
+			repoIssues = append(repoIssues, issue)
+		}
+	}
+
+	if err := h.renderer.RenderRepositoryDetail(w, *repository, repoMRs, repoIssues); err != nil {
 		h.logger.Printf("failed to render repository detail: %v", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
@@ -243,6 +287,42 @@ func (h *Handler) handleRecentPipelines(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
+
+// handleMergeRequests serves the merge requests/pull requests page.
+func (h *Handler) handleMergeRequests(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html")
+
+	mrs, err := h.pipelineService.GetAllMergeRequests(r.Context())
+	if err != nil {
+		h.logger.Printf("failed to get merge requests: %v", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	if err := h.renderer.RenderMergeRequests(w, mrs); err != nil {
+		h.logger.Printf("failed to render merge requests: %v", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+}
+
+// handleIssues serves the issues page.
+func (h *Handler) handleIssues(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html")
+
+	issues, err := h.pipelineService.GetAllIssues(r.Context())
+	if err != nil {
+		h.logger.Printf("failed to get issues: %v", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	if err := h.renderer.RenderIssues(w, issues); err != nil {
+		h.logger.Printf("failed to render issues: %v", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+}
 // StdLogger wraps the standard log package to implement Logger interface.
 type StdLogger struct{}
 

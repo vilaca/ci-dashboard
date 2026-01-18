@@ -1,7 +1,6 @@
 package dashboard
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -16,11 +15,13 @@ type Renderer interface {
 	RenderIndex(w io.Writer) error
 	RenderHealth(w io.Writer) error
 	RenderPipelines(w io.Writer, pipelines []domain.Pipeline) error
-	RenderPipelinesJSON(w io.Writer, pipelines []domain.Pipeline) error
 	RenderPipelinesGrouped(w io.Writer, pipelinesByWorkflow map[string][]domain.Pipeline) error
 	RenderRepositories(w io.Writer, repositories []service.RepositoryWithRuns) error
 	RenderRecentPipelines(w io.Writer, pipelines []domain.Pipeline) error
-	RenderRepositoryDetail(w io.Writer, repository service.RepositoryWithRuns) error
+	RenderRepositoryDetail(w io.Writer, repository service.RepositoryWithRuns, mrs []domain.MergeRequest, issues []domain.Issue) error
+	RenderFailedPipelines(w io.Writer, pipelines []domain.Pipeline) error
+	RenderMergeRequests(w io.Writer, mrs []domain.MergeRequest) error
+	RenderIssues(w io.Writer, issues []domain.Issue) error
 }
 
 // HTMLRenderer implements Renderer for HTML responses.
@@ -42,7 +43,9 @@ func (r *HTMLRenderer) RenderIndex(w io.Writer) error {
 		p { color: var(--text-secondary); }
 	`))
 	sb.WriteString(`<body>
-	<div class="container">
+`)
+	sb.WriteString(loadingSpinner())
+	sb.WriteString(`	<div class="container">
 		<h1>CI Dashboard</h1>
 `)
 	sb.WriteString(buildNavigation())
@@ -70,13 +73,6 @@ func (r *HTMLRenderer) RenderPipelines(w io.Writer, pipelines []domain.Pipeline)
 	return err
 }
 
-func (r *HTMLRenderer) RenderPipelinesJSON(w io.Writer, pipelines []domain.Pipeline) error {
-	return json.NewEncoder(w).Encode(map[string]interface{}{
-		"pipelines": pipelines,
-		"count":     len(pipelines),
-	})
-}
-
 // buildPipelinesHTML constructs the HTML for displaying pipelines.
 // Follows SLAP - operates at single level of abstraction.
 func (r *HTMLRenderer) buildPipelinesHTML(pipelines []domain.Pipeline) string {
@@ -96,7 +92,9 @@ func (r *HTMLRenderer) buildPipelinesHTML(pipelines []domain.Pipeline) string {
 		.refresh button:hover { background: var(--button-hover); }
 	`))
 	sb.WriteString(`<body>
-	<div class="container">
+`)
+	sb.WriteString(loadingSpinner())
+	sb.WriteString(`	<div class="container">
 		<h1>CI/CD Pipelines</h1>
 `)
 	sb.WriteString(buildNavigation())
@@ -176,7 +174,9 @@ func (r *HTMLRenderer) RenderPipelinesGrouped(w io.Writer, pipelinesByWorkflow m
 		}
 	`))
 	sb.WriteString(`<body>
-	<div class="container">
+`)
+	sb.WriteString(loadingSpinner())
+	sb.WriteString(`	<div class="container">
 		<h1>CI/CD Pipelines</h1>
 `)
 	sb.WriteString(buildNavigation())

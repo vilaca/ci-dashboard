@@ -366,3 +366,171 @@ func (s *PipelineService) GetRecentPipelines(ctx context.Context, totalLimit int
 
 	return allPipelines, nil
 }
+
+// GetAllMergeRequests retrieves all open merge requests/pull requests across all projects.
+func (s *PipelineService) GetAllMergeRequests(ctx context.Context) ([]domain.MergeRequest, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	// Get all projects first
+	projects, err := s.GetAllProjects(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Fetch merge requests concurrently
+	type result struct {
+		mrs []domain.MergeRequest
+		err error
+	}
+
+	results := make(chan result, len(projects))
+	var wg sync.WaitGroup
+
+	for _, project := range projects {
+		wg.Add(1)
+		go func(proj domain.Project) {
+			defer wg.Done()
+
+			// Check if client supports ExtendedClient interface
+			var client api.ExtendedClient
+			for _, c := range s.clients {
+				if ec, ok := c.(api.ExtendedClient); ok {
+					client = ec
+					break
+				}
+			}
+
+			if client == nil {
+				results <- result{mrs: nil, err: nil}
+				return
+			}
+
+			mrs, err := client.GetMergeRequests(ctx, proj.ID)
+			if err != nil {
+				results <- result{mrs: nil, err: fmt.Errorf("failed to get MRs for %s: %w", proj.Name, err)}
+				return
+			}
+
+			// Set repository name from project
+			for i := range mrs {
+				if mrs[i].Repository == "" || mrs[i].Repository == mrs[i].Title {
+					mrs[i].Repository = proj.Name
+				}
+			}
+
+			results <- result{mrs: mrs, err: nil}
+		}(project)
+	}
+
+	// Wait for all goroutines to complete
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	// Collect all merge requests
+	var allMRs []domain.MergeRequest
+	for r := range results {
+		if r.err != nil {
+			// Log error but continue with other projects
+			continue
+		}
+		allMRs = append(allMRs, r.mrs...)
+	}
+
+	// Sort by updated time (most recent first)
+	for i := 0; i < len(allMRs)-1; i++ {
+		for j := 0; j < len(allMRs)-i-1; j++ {
+			if allMRs[j].UpdatedAt.Before(allMRs[j+1].UpdatedAt) {
+				allMRs[j], allMRs[j+1] = allMRs[j+1], allMRs[j]
+			}
+		}
+	}
+
+	return allMRs, nil
+}
+
+// GetAllIssues retrieves all open issues across all projects.
+func (s *PipelineService) GetAllIssues(ctx context.Context) ([]domain.Issue, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	// Get all projects first
+	projects, err := s.GetAllProjects(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Fetch issues concurrently
+	type result struct {
+		issues []domain.Issue
+		err    error
+	}
+
+	results := make(chan result, len(projects))
+	var wg sync.WaitGroup
+
+	for _, project := range projects {
+		wg.Add(1)
+		go func(proj domain.Project) {
+			defer wg.Done()
+
+			// Check if client supports ExtendedClient interface
+			var client api.ExtendedClient
+			for _, c := range s.clients {
+				if ec, ok := c.(api.ExtendedClient); ok {
+					client = ec
+					break
+				}
+			}
+
+			if client == nil {
+				results <- result{issues: nil, err: nil}
+				return
+			}
+
+			issues, err := client.GetIssues(ctx, proj.ID)
+			if err != nil {
+				results <- result{issues: nil, err: fmt.Errorf("failed to get issues for %s: %w", proj.Name, err)}
+				return
+			}
+
+			// Set repository name from project
+			for i := range issues {
+				if issues[i].Repository == "" || issues[i].Repository == issues[i].Title {
+					issues[i].Repository = proj.Name
+				}
+			}
+
+			results <- result{issues: issues, err: nil}
+		}(project)
+	}
+
+	// Wait for all goroutines to complete
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	// Collect all issues
+	var allIssues []domain.Issue
+	for r := range results {
+		if r.err != nil {
+			// Log error but continue with other projects
+			continue
+		}
+		allIssues = append(allIssues, r.issues...)
+	}
+
+	// Sort by updated time (most recent first)
+	for i := 0; i < len(allIssues)-1; i++ {
+		for j := 0; j < len(allIssues)-i-1; j++ {
+			if allIssues[j].UpdatedAt.Before(allIssues[j+1].UpdatedAt) {
+				allIssues[j], allIssues[j+1] = allIssues[j+1], allIssues[j]
+			}
+		}
+	}
+
+	return allIssues, nil
+}

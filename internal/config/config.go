@@ -30,20 +30,26 @@ type Config struct {
 	// Display configuration
 	RunsPerRepository    int // Number of recent runs to show per repository
 	RecentPipelinesLimit int // Total number of pipelines to show in recent view
+
+	// Cache configuration
+	GitLabCacheDurationSeconds int // Duration to cache GitLab API responses (default: 300 = 5 minutes)
+	GitHubCacheDurationSeconds int // Duration to cache GitHub API responses (default: 300 = 5 minutes)
 }
 
 // yamlConfig represents the YAML file structure.
 type yamlConfig struct {
 	Port   int `yaml:"port"`
 	GitLab struct {
-		URL            string   `yaml:"url"`
-		Token          string   `yaml:"token"`
-		WatchedRepos   []string `yaml:"watched_repos"`
+		URL                  string   `yaml:"url"`
+		Token                string   `yaml:"token"`
+		WatchedRepos         []string `yaml:"watched_repos"`
+		CacheDurationSeconds int      `yaml:"cache_duration_seconds"`
 	} `yaml:"gitlab"`
 	GitHub struct {
-		URL            string   `yaml:"url"`
-		Token          string   `yaml:"token"`
-		WatchedRepos   []string `yaml:"watched_repos"`
+		URL                  string   `yaml:"url"`
+		Token                string   `yaml:"token"`
+		WatchedRepos         []string `yaml:"watched_repos"`
+		CacheDurationSeconds int      `yaml:"cache_duration_seconds"`
 	} `yaml:"github"`
 	Display struct {
 		RunsPerRepository    int `yaml:"runs_per_repository"`
@@ -145,16 +151,36 @@ func Load() (*Config, error) {
 		recentLimit = yc.Display.RecentPipelinesLimit
 	}
 
+	gitlabCacheDuration := 300 // 5 minutes default
+	if cacheStr := os.Getenv("GITLAB_CACHE_DURATION_SECONDS"); cacheStr != "" {
+		if c, err := strconv.Atoi(cacheStr); err == nil && c >= 0 {
+			gitlabCacheDuration = c
+		}
+	} else if yc.GitLab.CacheDurationSeconds != 0 {
+		gitlabCacheDuration = yc.GitLab.CacheDurationSeconds
+	}
+
+	githubCacheDuration := 300 // 5 minutes default
+	if cacheStr := os.Getenv("GITHUB_CACHE_DURATION_SECONDS"); cacheStr != "" {
+		if c, err := strconv.Atoi(cacheStr); err == nil && c >= 0 {
+			githubCacheDuration = c
+		}
+	} else if yc.GitHub.CacheDurationSeconds != 0 {
+		githubCacheDuration = yc.GitHub.CacheDurationSeconds
+	}
+
 	return &Config{
-		Port:                 port,
-		GitLabURL:            gitlabURL,
-		GitLabToken:          gitlabToken,
-		GitHubURL:            githubURL,
-		GitHubToken:          githubToken,
-		GitLabWatchedRepos:   gitlabWatchedRepos,
-		GitHubWatchedRepos:   githubWatchedRepos,
-		RunsPerRepository:    runsPerRepo,
-		RecentPipelinesLimit: recentLimit,
+		Port:                       port,
+		GitLabURL:                  gitlabURL,
+		GitLabToken:                gitlabToken,
+		GitHubURL:                  githubURL,
+		GitHubToken:                githubToken,
+		GitLabWatchedRepos:         gitlabWatchedRepos,
+		GitHubWatchedRepos:         githubWatchedRepos,
+		RunsPerRepository:          runsPerRepo,
+		RecentPipelinesLimit:       recentLimit,
+		GitLabCacheDurationSeconds: gitlabCacheDuration,
+		GitHubCacheDurationSeconds: githubCacheDuration,
 	}, nil
 }
 

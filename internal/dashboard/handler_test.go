@@ -18,11 +18,13 @@ type mockRenderer struct {
 	indexErr             error
 	healthErr            error
 	pipelinesErr         error
-	pipelinesJSONErr     error
 	pipelinesGroupedErr  error
 	repositoriesErr      error
 	recentPipelinesErr   error
 	repositoryDetailErr  error
+	failedPipelinesErr   error
+	mergeRequestsErr     error
+	issuesErr            error
 }
 
 func (m *mockRenderer) RenderIndex(w io.Writer) error {
@@ -46,14 +48,6 @@ func (m *mockRenderer) RenderPipelines(w io.Writer, pipelines []domain.Pipeline)
 		return m.pipelinesErr
 	}
 	_, err := w.Write([]byte("mock pipelines"))
-	return err
-}
-
-func (m *mockRenderer) RenderPipelinesJSON(w io.Writer, pipelines []domain.Pipeline) error {
-	if m.pipelinesJSONErr != nil {
-		return m.pipelinesJSONErr
-	}
-	_, err := w.Write([]byte(`{"pipelines":[]}`))
 	return err
 }
 
@@ -81,11 +75,35 @@ func (m *mockRenderer) RenderRecentPipelines(w io.Writer, pipelines []domain.Pip
 	return err
 }
 
-func (m *mockRenderer) RenderRepositoryDetail(w io.Writer, repository service.RepositoryWithRuns) error {
+func (m *mockRenderer) RenderRepositoryDetail(w io.Writer, repository service.RepositoryWithRuns, mrs []domain.MergeRequest, issues []domain.Issue) error {
 	if m.repositoryDetailErr != nil {
 		return m.repositoryDetailErr
 	}
 	_, err := w.Write([]byte("mock repository detail"))
+	return err
+}
+
+func (m *mockRenderer) RenderFailedPipelines(w io.Writer, pipelines []domain.Pipeline) error {
+	if m.failedPipelinesErr != nil {
+		return m.failedPipelinesErr
+	}
+	_, err := w.Write([]byte("mock failed pipelines"))
+	return err
+}
+
+func (m *mockRenderer) RenderMergeRequests(w io.Writer, mrs []domain.MergeRequest) error {
+	if m.mergeRequestsErr != nil {
+		return m.mergeRequestsErr
+	}
+	_, err := w.Write([]byte("mock merge requests"))
+	return err
+}
+
+func (m *mockRenderer) RenderIssues(w io.Writer, issues []domain.Issue) error {
+	if m.issuesErr != nil {
+		return m.issuesErr
+	}
+	_, err := w.Write([]byte("mock issues"))
 	return err
 }
 
@@ -107,6 +125,8 @@ type mockPipelineService struct {
 	getPipelinesByWorkflowFunc       func(ctx context.Context, projectID, workflowID string, limit int) ([]domain.Pipeline, error)
 	getRepositoriesWithRecentRunsFunc func(ctx context.Context, runsPerRepo int) ([]service.RepositoryWithRuns, error)
 	getRecentPipelinesFunc            func(ctx context.Context, totalLimit int) ([]domain.Pipeline, error)
+	getAllMergeRequestsFunc           func(ctx context.Context) ([]domain.MergeRequest, error)
+	getAllIssuesFunc                  func(ctx context.Context) ([]domain.Issue, error)
 }
 
 func (m *mockPipelineService) GetAllProjects(ctx context.Context) ([]domain.Project, error) {
@@ -156,6 +176,20 @@ func (m *mockPipelineService) GetRecentPipelines(ctx context.Context, totalLimit
 		return m.getRecentPipelinesFunc(ctx, totalLimit)
 	}
 	return []domain.Pipeline{}, nil
+}
+
+func (m *mockPipelineService) GetAllMergeRequests(ctx context.Context) ([]domain.MergeRequest, error) {
+	if m.getAllMergeRequestsFunc != nil {
+		return m.getAllMergeRequestsFunc(ctx)
+	}
+	return []domain.MergeRequest{}, nil
+}
+
+func (m *mockPipelineService) GetAllIssues(ctx context.Context) ([]domain.Issue, error) {
+	if m.getAllIssuesFunc != nil {
+		return m.getAllIssuesFunc(ctx)
+	}
+	return []domain.Issue{}, nil
 }
 
 // TestHandleHealth tests the health check endpoint.
@@ -333,37 +367,6 @@ func TestHandlePipelines_ServiceError(t *testing.T) {
 
 	if len(logger.messages) == 0 {
 		t.Error("expected error to be logged")
-	}
-}
-
-// TestHandlePipelinesAPI tests the pipelines JSON API endpoint.
-func TestHandlePipelinesAPI(t *testing.T) {
-	// Arrange
-	renderer := &mockRenderer{}
-	logger := &mockLogger{}
-	pipelineService := &mockPipelineService{
-		getLatestPipelinesFunc: func(ctx context.Context) ([]domain.Pipeline, error) {
-			return []domain.Pipeline{}, nil
-		},
-	}
-	handler := NewHandler(renderer, logger, pipelineService, 3, 50)
-	mux := http.NewServeMux()
-	handler.RegisterRoutes(mux)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/pipelines", nil)
-	w := httptest.NewRecorder()
-
-	// Act
-	mux.ServeHTTP(w, req)
-
-	// Assert
-	if w.Code != http.StatusOK {
-		t.Errorf("expected status 200, got %d", w.Code)
-	}
-
-	contentType := w.Header().Get("Content-Type")
-	if contentType != "application/json" {
-		t.Errorf("expected Content-Type application/json, got %s", contentType)
 	}
 }
 

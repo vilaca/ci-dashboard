@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/vilaca/ci-dashboard/internal/api"
 	"github.com/vilaca/ci-dashboard/internal/api/github"
@@ -28,13 +29,13 @@ func main() {
 	log.Printf("Starting CI Dashboard on http://localhost%s", addr)
 
 	if cfg.HasGitLabConfig() {
-		log.Printf("GitLab integration enabled")
+		log.Printf("GitLab integration enabled (cache: %ds)", cfg.GitLabCacheDurationSeconds)
 		if len(cfg.GetGitLabWatchedRepos()) > 0 {
 			log.Printf("GitLab whitelist: %d repositories", len(cfg.GetGitLabWatchedRepos()))
 		}
 	}
 	if cfg.HasGitHubConfig() {
-		log.Printf("GitHub integration enabled")
+		log.Printf("GitHub integration enabled (cache: %ds)", cfg.GitHubCacheDurationSeconds)
 		if len(cfg.GetGitHubWatchedRepos()) > 0 {
 			log.Printf("GitHub whitelist: %d repositories", len(cfg.GetGitHubWatchedRepos()))
 		}
@@ -63,13 +64,17 @@ func buildServer(cfg *config.Config) http.Handler {
 		cfg.GetGitHubWatchedRepos(),
 	)
 
-	// Register CI clients based on configuration
+	// Register CI clients based on configuration with caching
 	if cfg.HasGitLabConfig() {
 		gitlabClient := gitlab.NewClient(api.ClientConfig{
 			BaseURL: cfg.GitLabURL,
 			Token:   cfg.GitLabToken,
 		}, httpClient)
-		pipelineService.RegisterClient("gitlab", gitlabClient)
+
+		// Wrap with caching layer
+		cacheDuration := time.Duration(cfg.GitLabCacheDurationSeconds) * time.Second
+		cachedGitLabClient := api.NewCachingClient(gitlabClient, cacheDuration)
+		pipelineService.RegisterClient("gitlab", cachedGitLabClient)
 	}
 
 	if cfg.HasGitHubConfig() {
@@ -77,7 +82,11 @@ func buildServer(cfg *config.Config) http.Handler {
 			BaseURL: cfg.GitHubURL,
 			Token:   cfg.GitHubToken,
 		}, httpClient)
-		pipelineService.RegisterClient("github", githubClient)
+
+		// Wrap with caching layer
+		cacheDuration := time.Duration(cfg.GitHubCacheDurationSeconds) * time.Second
+		cachedGitHubClient := api.NewCachingClient(githubClient, cacheDuration)
+		pipelineService.RegisterClient("github", cachedGitHubClient)
 	}
 
 	// Create handler with dependencies (Dependency Injection)

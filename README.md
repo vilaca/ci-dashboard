@@ -146,6 +146,7 @@ gitlab:
   watched_repos:
     - "123"      # GitLab project IDs
     - "456"
+  cache_duration_seconds: 300  # Cache API responses for 5 minutes
 
 github:
   url: https://api.github.com
@@ -153,6 +154,7 @@ github:
   watched_repos:
     - "owner/repo1"    # GitHub owner/repo format
     - "owner/repo2"
+  cache_duration_seconds: 300  # Cache API responses for 5 minutes
 
 display:
   runs_per_repository: 3      # Number of recent runs per repo
@@ -174,15 +176,60 @@ export CONFIG_FILE="/path/to/config.yaml" # Optional: Custom config file
 export GITLAB_URL="https://gitlab.com"           # Default: https://gitlab.com
 export GITLAB_TOKEN="your-gitlab-token"
 export GITLAB_WATCHED_REPOS="123,456"            # Comma-separated project IDs
+export GITLAB_CACHE_DURATION_SECONDS=300         # Default: 300 (5 minutes)
 
 # GitHub Configuration (optional)
 export GITHUB_URL="https://api.github.com"       # Default: https://api.github.com
 export GITHUB_TOKEN="your-github-token"
 export GITHUB_WATCHED_REPOS="owner/repo1,owner/repo2"  # Comma-separated repos
+export GITHUB_CACHE_DURATION_SECONDS=300         # Default: 300 (5 minutes)
 
 # Display Configuration
 export RUNS_PER_REPOSITORY=3              # Default: 3
 export RECENT_PIPELINES_LIMIT=50          # Default: 50
+```
+
+#### Caching Configuration (Performance & Rate Limiting)
+
+**Important:** Caching is enabled by default to improve performance and avoid API rate limiting.
+
+**Cache Duration:**
+- **Default**: 300 seconds (5 minutes) for both GitLab and GitHub
+- **Minimum**: 0 seconds (disables caching - not recommended)
+- **Recommended**: 300-600 seconds for GitHub (to avoid rate limiting)
+
+**Benefits:**
+- ✅ **Reduces API calls**: Dramatically reduces the number of API requests
+- ✅ **Faster page loads**: Cached responses load instantly
+- ✅ **Avoids rate limiting**: GitHub has 5,000 requests/hour with token, 60 without
+- ✅ **Lower latency**: No network delay for cached data
+- ✅ **Better reliability**: Works even if API is temporarily slow
+
+**Rate Limits:**
+- **GitHub (authenticated)**: 5,000 requests/hour
+- **GitHub (unauthenticated)**: 60 requests/hour
+- **GitLab**: 120,000 requests/hour (self-hosted may vary)
+
+**Cache Behavior:**
+- Each platform (GitLab/GitHub) has independent cache settings
+- Cache is stored in memory (cleared on restart)
+- Expired entries are automatically cleaned up
+- Set to `0` to disable caching (not recommended for production)
+
+**Example Scenarios:**
+
+```yaml
+# Low-traffic dashboard (longer cache)
+github:
+  cache_duration_seconds: 600  # 10 minutes
+
+# High-traffic dashboard (shorter cache)
+github:
+  cache_duration_seconds: 180  # 3 minutes
+
+# Disable caching (development only)
+github:
+  cache_duration_seconds: 0    # No caching
 ```
 
 #### Repository Whitelisting (Security Feature)
