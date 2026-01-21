@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/vilaca/ci-dashboard/internal/api"
@@ -18,6 +20,18 @@ type Client struct {
 	baseURL    string
 	token      string
 	httpClient HTTPClient
+
+	// Rate limiting and deduplication
+	semaphore  chan struct{}            // Limits concurrent requests
+	inFlight   map[string]*requestState // Tracks in-flight requests
+	inFlightMu sync.Mutex               // Protects inFlight map
+}
+
+// requestState tracks a single in-flight request.
+type requestState struct {
+	done   chan struct{}  // Closed when request completes
+	result interface{}    // The result (or nil)
+	err    error          // Any error
 }
 
 // HTTPClient interface for HTTP operations (allows mocking in tests).
@@ -33,52 +47,190 @@ func NewClient(config api.ClientConfig, httpClient HTTPClient) *Client {
 		baseURL:    config.BaseURL,
 		token:      config.Token,
 		httpClient: httpClient,
+		semaphore:  make(chan struct{}, 5), // Max 5 concurrent requests
+		inFlight:   make(map[string]*requestState),
 	}
+}
+
+// doRequestWithDedup performs an HTTP request with deduplication and rate limiting.
+// If the same request is already in-flight, it waits for that request to complete
+// and returns the cached result instead of making a duplicate API call.
+func (c *Client) doRequestWithDedup(ctx context.Context, key string, fn func() (interface{}, error)) (interface{}, error) {
+	startTime := time.Now()
+
+	// Check if this request is already in-flight
+	c.inFlightMu.Lock()
+	if state, exists := c.inFlight[key]; exists {
+		// Request is in-flight, wait for it to complete
+		c.inFlightMu.Unlock()
+		log.Printf("[GitLab] %s - DEDUPED (waiting for in-flight request)", key)
+
+		select {
+		case <-state.done:
+			duration := time.Since(startTime)
+			if state.err != nil {
+				log.Printf("[GitLab] %s - DEDUPED ERROR (waited %v): %v", key, duration.Round(time.Millisecond), state.err)
+			} else {
+				log.Printf("[GitLab] %s - DEDUPED SUCCESS (waited %v)", key, duration.Round(time.Millisecond))
+			}
+			return state.result, state.err
+		case <-ctx.Done():
+			log.Printf("[GitLab] %s - DEDUPED CANCELLED (waited %v): %v", key, time.Since(startTime).Round(time.Millisecond), ctx.Err())
+			return nil, ctx.Err()
+		}
+	}
+
+	// Create new request state
+	state := &requestState{
+		done: make(chan struct{}),
+	}
+	c.inFlight[key] = state
+	c.inFlightMu.Unlock()
+
+	// Ensure cleanup on exit
+	defer func() {
+		c.inFlightMu.Lock()
+		delete(c.inFlight, key)
+		c.inFlightMu.Unlock()
+		close(state.done)
+	}()
+
+	// Acquire semaphore (rate limiting)
+	semaphoreStart := time.Now()
+	select {
+	case c.semaphore <- struct{}{}:
+		defer func() { <-c.semaphore }()
+		queueTime := time.Since(semaphoreStart)
+		if queueTime > 100*time.Millisecond {
+			log.Printf("[GitLab] %s - QUEUED for %v (rate limit)", key, queueTime.Round(time.Millisecond))
+		}
+	case <-ctx.Done():
+		state.err = ctx.Err()
+		log.Printf("[GitLab] %s - CANCELLED (while queuing): %v", key, ctx.Err())
+		return nil, state.err
+	}
+
+	// Execute the actual request
+	log.Printf("[GitLab] %s - START", key)
+	requestStart := time.Now()
+	state.result, state.err = fn()
+	requestDuration := time.Since(requestStart)
+	totalDuration := time.Since(startTime)
+
+	if state.err != nil {
+		log.Printf("[GitLab] %s - ERROR (request: %v, total: %v): %v",
+			key, requestDuration.Round(time.Millisecond), totalDuration.Round(time.Millisecond), state.err)
+	} else {
+		log.Printf("[GitLab] %s - SUCCESS (request: %v, total: %v)",
+			key, requestDuration.Round(time.Millisecond), totalDuration.Round(time.Millisecond))
+	}
+
+	return state.result, state.err
 }
 
 // GetProjects retrieves all projects from GitLab.
 func (c *Client) GetProjects(ctx context.Context) ([]domain.Project, error) {
-	url := fmt.Sprintf("%s/api/v4/projects?membership=true", c.baseURL)
+	key := "GetProjects"
 
-	var glProjects []gitlabProject
-	if err := c.doRequest(ctx, url, &glProjects); err != nil {
-		return nil, fmt.Errorf("failed to get projects: %w", err)
+	result, err := c.doRequestWithDedup(ctx, key, func() (interface{}, error) {
+		// Fetch all accessible projects (not just direct membership)
+		// This works better with organization/group-based access
+		url := fmt.Sprintf("%s/api/v4/projects?per_page=100", c.baseURL)
+
+		var glProjects []gitlabProject
+		if err := c.doRequest(ctx, url, &glProjects); err != nil {
+			return nil, fmt.Errorf("failed to get projects: %w", err)
+		}
+
+		return c.convertProjects(glProjects), nil
+	})
+
+	if err != nil {
+		return nil, err
 	}
-
-	return c.convertProjects(glProjects), nil
+	return result.([]domain.Project), nil
 }
 
 // GetLatestPipeline retrieves the most recent pipeline for a project and branch.
 func (c *Client) GetLatestPipeline(ctx context.Context, projectID, branch string) (*domain.Pipeline, error) {
-	url := fmt.Sprintf("%s/api/v4/projects/%s/pipelines?ref=%s&per_page=1", c.baseURL, projectID, branch)
+	key := fmt.Sprintf("GetLatestPipeline:%s:%s", projectID, branch)
 
-	var glPipelines []gitlabPipeline
-	if err := c.doRequest(ctx, url, &glPipelines); err != nil {
-		return nil, fmt.Errorf("failed to get pipeline: %w", err)
+	result, err := c.doRequestWithDedup(ctx, key, func() (interface{}, error) {
+		url := fmt.Sprintf("%s/api/v4/projects/%s/pipelines?ref=%s&per_page=1", c.baseURL, projectID, branch)
+
+		var glPipelines []gitlabPipeline
+		if err := c.doRequest(ctx, url, &glPipelines); err != nil {
+			return nil, fmt.Errorf("failed to get pipeline: %w", err)
+		}
+
+		if len(glPipelines) == 0 {
+			return (*domain.Pipeline)(nil), nil
+		}
+
+		return c.convertPipeline(glPipelines[0], projectID), nil
+	})
+
+	if err != nil {
+		return nil, err
 	}
-
-	if len(glPipelines) == 0 {
-		return nil, nil
-	}
-
-	return c.convertPipeline(glPipelines[0], projectID), nil
+	return result.(*domain.Pipeline), nil
 }
 
 // GetPipelines retrieves recent pipelines for a project.
 func (c *Client) GetPipelines(ctx context.Context, projectID string, limit int) ([]domain.Pipeline, error) {
-	url := fmt.Sprintf("%s/api/v4/projects/%s/pipelines?per_page=%d", c.baseURL, projectID, limit)
+	key := fmt.Sprintf("GetPipelines:%s:%d", projectID, limit)
 
-	var glPipelines []gitlabPipeline
-	if err := c.doRequest(ctx, url, &glPipelines); err != nil {
-		return nil, fmt.Errorf("failed to get pipelines: %w", err)
+	result, err := c.doRequestWithDedup(ctx, key, func() (interface{}, error) {
+		url := fmt.Sprintf("%s/api/v4/projects/%s/pipelines?per_page=%d", c.baseURL, projectID, limit)
+
+		var glPipelines []gitlabPipeline
+		if err := c.doRequest(ctx, url, &glPipelines); err != nil {
+			return nil, fmt.Errorf("failed to get pipelines: %w", err)
+		}
+
+		pipelines := make([]domain.Pipeline, len(glPipelines))
+		for i, glp := range glPipelines {
+			pipelines[i] = *c.convertPipeline(glp, projectID)
+		}
+
+		return pipelines, nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+	return result.([]domain.Pipeline), nil
+}
+
+// GetBranches retrieves branches for a project.
+func (c *Client) GetBranches(ctx context.Context, projectID string, limit int) ([]domain.Branch, error) {
+	perPage := limit
+	if perPage == 0 || perPage > 100 {
+		perPage = 100
 	}
 
-	pipelines := make([]domain.Pipeline, len(glPipelines))
-	for i, glp := range glPipelines {
-		pipelines[i] = *c.convertPipeline(glp, projectID)
-	}
+	key := fmt.Sprintf("GetBranches:%s:%d", projectID, perPage)
 
-	return pipelines, nil
+	result, err := c.doRequestWithDedup(ctx, key, func() (interface{}, error) {
+		url := fmt.Sprintf("%s/api/v4/projects/%s/repository/branches?per_page=%d", c.baseURL, projectID, perPage)
+
+		var glBranches []gitlabBranch
+		if err := c.doRequest(ctx, url, &glBranches); err != nil {
+			return nil, fmt.Errorf("failed to get branches: %w", err)
+		}
+
+		branches := make([]domain.Branch, len(glBranches))
+		for i, glb := range glBranches {
+			branches[i] = c.convertBranch(glb, projectID)
+		}
+
+		return branches, nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+	return result.([]domain.Branch), nil
 }
 
 // doRequest performs an HTTP request to GitLab API.
@@ -142,6 +294,23 @@ func (c *Client) convertPipeline(glp gitlabPipeline, projectID string) *domain.P
 	}
 }
 
+// convertBranch converts GitLab branch to domain model.
+func (c *Client) convertBranch(glb gitlabBranch, projectID string) domain.Branch {
+	return domain.Branch{
+		Name:           glb.Name,
+		ProjectID:      projectID,
+		Repository:     projectID,
+		LastCommitSHA:  glb.Commit.ID,
+		LastCommitMsg:  glb.Commit.Message,
+		LastCommitDate: glb.Commit.CommittedDate,
+		CommitAuthor:   glb.Commit.AuthorName,
+		IsDefault:      glb.Default,
+		IsProtected:    glb.Protected,
+		WebURL:         glb.WebURL,
+		Platform:       "gitlab",
+	}
+}
+
 // convertStatus converts GitLab status to domain status.
 func convertStatus(glStatus string) domain.Status {
 	switch glStatus {
@@ -178,38 +347,69 @@ type gitlabPipeline struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+type gitlabBranch struct {
+	Name      string `json:"name"`
+	Default   bool   `json:"default"`
+	Protected bool   `json:"protected"`
+	WebURL    string `json:"web_url"`
+	Commit    struct {
+		ID            string    `json:"id"`
+		Message       string    `json:"message"`
+		CommittedDate time.Time `json:"committed_date"`
+		AuthorName    string    `json:"author_name"`
+	} `json:"commit"`
+}
+
 // GetMergeRequests retrieves open merge requests for a project.
 func (c *Client) GetMergeRequests(ctx context.Context, projectID string) ([]domain.MergeRequest, error) {
-	url := fmt.Sprintf("%s/api/v4/projects/%s/merge_requests?state=opened&per_page=50", c.baseURL, projectID)
+	key := fmt.Sprintf("GetMergeRequests:%s", projectID)
 
-	var glMRs []gitlabMergeRequest
-	if err := c.doRequest(ctx, url, &glMRs); err != nil {
-		return nil, fmt.Errorf("failed to get merge requests: %w", err)
+	result, err := c.doRequestWithDedup(ctx, key, func() (interface{}, error) {
+		url := fmt.Sprintf("%s/api/v4/projects/%s/merge_requests?state=opened&per_page=50", c.baseURL, projectID)
+
+		var glMRs []gitlabMergeRequest
+		if err := c.doRequest(ctx, url, &glMRs); err != nil {
+			return nil, fmt.Errorf("failed to get merge requests: %w", err)
+		}
+
+		mrs := make([]domain.MergeRequest, len(glMRs))
+		for i, glMR := range glMRs {
+			mrs[i] = c.convertMergeRequest(glMR, projectID)
+		}
+
+		return mrs, nil
+	})
+
+	if err != nil {
+		return nil, err
 	}
-
-	mrs := make([]domain.MergeRequest, len(glMRs))
-	for i, glMR := range glMRs {
-		mrs[i] = c.convertMergeRequest(glMR, projectID)
-	}
-
-	return mrs, nil
+	return result.([]domain.MergeRequest), nil
 }
 
 // GetIssues retrieves open issues for a project.
 func (c *Client) GetIssues(ctx context.Context, projectID string) ([]domain.Issue, error) {
-	url := fmt.Sprintf("%s/api/v4/projects/%s/issues?state=opened&per_page=50", c.baseURL, projectID)
+	key := fmt.Sprintf("GetIssues:%s", projectID)
 
-	var glIssues []gitlabIssue
-	if err := c.doRequest(ctx, url, &glIssues); err != nil {
-		return nil, fmt.Errorf("failed to get issues: %w", err)
+	result, err := c.doRequestWithDedup(ctx, key, func() (interface{}, error) {
+		url := fmt.Sprintf("%s/api/v4/projects/%s/issues?state=opened&per_page=50", c.baseURL, projectID)
+
+		var glIssues []gitlabIssue
+		if err := c.doRequest(ctx, url, &glIssues); err != nil {
+			return nil, fmt.Errorf("failed to get issues: %w", err)
+		}
+
+		issues := make([]domain.Issue, len(glIssues))
+		for i, glIssue := range glIssues {
+			issues[i] = c.convertIssue(glIssue, projectID)
+		}
+
+		return issues, nil
+	})
+
+	if err != nil {
+		return nil, err
 	}
-
-	issues := make([]domain.Issue, len(glIssues))
-	for i, glIssue := range glIssues {
-		issues[i] = c.convertIssue(glIssue, projectID)
-	}
-
-	return issues, nil
+	return result.([]domain.Issue), nil
 }
 
 // convertMergeRequest converts GitLab MR to domain MergeRequest.

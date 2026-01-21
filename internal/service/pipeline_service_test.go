@@ -15,6 +15,7 @@ type mockClient struct {
 	getProjectsFunc       func(ctx context.Context) ([]domain.Project, error)
 	getLatestPipelineFunc func(ctx context.Context, projectID, branch string) (*domain.Pipeline, error)
 	getPipelinesFunc      func(ctx context.Context, projectID string, limit int) ([]domain.Pipeline, error)
+	getBranchesFunc       func(ctx context.Context, projectID string, limit int) ([]domain.Branch, error)
 }
 
 func (m *mockClient) GetProjects(ctx context.Context) ([]domain.Project, error) {
@@ -34,6 +35,13 @@ func (m *mockClient) GetLatestPipeline(ctx context.Context, projectID, branch st
 func (m *mockClient) GetPipelines(ctx context.Context, projectID string, limit int) ([]domain.Pipeline, error) {
 	if m.getPipelinesFunc != nil {
 		return m.getPipelinesFunc(ctx, projectID, limit)
+	}
+	return nil, nil
+}
+
+func (m *mockClient) GetBranches(ctx context.Context, projectID string, limit int) ([]domain.Branch, error) {
+	if m.getBranchesFunc != nil {
+		return m.getBranchesFunc(ctx, projectID, limit)
 	}
 	return nil, nil
 }

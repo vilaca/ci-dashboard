@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/vilaca/ci-dashboard/internal/api"
@@ -21,6 +22,18 @@ type Client struct {
 	baseURL    string
 	token      string
 	httpClient HTTPClient
+
+	// Rate limiting and deduplication
+	semaphore  chan struct{}            // Limits concurrent requests
+	inFlight   map[string]*requestState // Tracks in-flight requests
+	inFlightMu sync.Mutex               // Protects inFlight map
+}
+
+// requestState tracks a single in-flight request.
+type requestState struct {
+	done   chan struct{}  // Closed when request completes
+	result interface{}    // The result (or nil)
+	err    error          // Any error
 }
 
 // HTTPClient interface for HTTP operations (allows mocking in tests).
@@ -41,71 +54,217 @@ func NewClient(config api.ClientConfig, httpClient HTTPClient) *Client {
 		baseURL:    baseURL,
 		token:      config.Token,
 		httpClient: httpClient,
+		semaphore:  make(chan struct{}, 5), // Max 5 concurrent requests
+		inFlight:   make(map[string]*requestState),
 	}
+}
+
+// doRequestWithDedup performs an HTTP request with deduplication and rate limiting.
+// If the same request is already in-flight, it waits for that request to complete
+// and returns the cached result instead of making a duplicate API call.
+func (c *Client) doRequestWithDedup(ctx context.Context, key string, fn func() (interface{}, error)) (interface{}, error) {
+	startTime := time.Now()
+
+	// Check if this request is already in-flight
+	c.inFlightMu.Lock()
+	if state, exists := c.inFlight[key]; exists {
+		// Request is in-flight, wait for it to complete
+		c.inFlightMu.Unlock()
+		log.Printf("[GitHub] %s - DEDUPED (waiting for in-flight request)", key)
+
+		select {
+		case <-state.done:
+			duration := time.Since(startTime)
+			if state.err != nil {
+				log.Printf("[GitHub] %s - DEDUPED ERROR (waited %v): %v", key, duration.Round(time.Millisecond), state.err)
+			} else {
+				log.Printf("[GitHub] %s - DEDUPED SUCCESS (waited %v)", key, duration.Round(time.Millisecond))
+			}
+			return state.result, state.err
+		case <-ctx.Done():
+			log.Printf("[GitHub] %s - DEDUPED CANCELLED (waited %v): %v", key, time.Since(startTime).Round(time.Millisecond), ctx.Err())
+			return nil, ctx.Err()
+		}
+	}
+
+	// Create new request state
+	state := &requestState{
+		done: make(chan struct{}),
+	}
+	c.inFlight[key] = state
+	c.inFlightMu.Unlock()
+
+	// Ensure cleanup on exit
+	defer func() {
+		c.inFlightMu.Lock()
+		delete(c.inFlight, key)
+		c.inFlightMu.Unlock()
+		close(state.done)
+	}()
+
+	// Acquire semaphore (rate limiting)
+	semaphoreStart := time.Now()
+	select {
+	case c.semaphore <- struct{}{}:
+		defer func() { <-c.semaphore }()
+		queueTime := time.Since(semaphoreStart)
+		if queueTime > 100*time.Millisecond {
+			log.Printf("[GitHub] %s - QUEUED for %v (rate limit)", key, queueTime.Round(time.Millisecond))
+		}
+	case <-ctx.Done():
+		state.err = ctx.Err()
+		log.Printf("[GitHub] %s - CANCELLED (while queuing): %v", key, ctx.Err())
+		return nil, state.err
+	}
+
+	// Execute the actual request
+	log.Printf("[GitHub] %s - START", key)
+	requestStart := time.Now()
+	state.result, state.err = fn()
+	requestDuration := time.Since(requestStart)
+	totalDuration := time.Since(startTime)
+
+	if state.err != nil {
+		log.Printf("[GitHub] %s - ERROR (request: %v, total: %v): %v",
+			key, requestDuration.Round(time.Millisecond), totalDuration.Round(time.Millisecond), state.err)
+	} else {
+		log.Printf("[GitHub] %s - SUCCESS (request: %v, total: %v)",
+			key, requestDuration.Round(time.Millisecond), totalDuration.Round(time.Millisecond))
+	}
+
+	return state.result, state.err
 }
 
 // GetProjects retrieves repositories with Actions enabled.
 func (c *Client) GetProjects(ctx context.Context) ([]domain.Project, error) {
-	url := fmt.Sprintf("%s/user/repos?per_page=100", c.baseURL)
+	key := "GetProjects"
 
-	var ghRepos []githubRepository
-	if err := c.doRequest(ctx, url, &ghRepos); err != nil {
-		return nil, fmt.Errorf("failed to get repositories: %w", err)
+	result, err := c.doRequestWithDedup(ctx, key, func() (interface{}, error) {
+		url := fmt.Sprintf("%s/user/repos?per_page=100", c.baseURL)
+
+		var ghRepos []githubRepository
+		if err := c.doRequest(ctx, url, &ghRepos); err != nil {
+			return nil, fmt.Errorf("failed to get repositories: %w", err)
+		}
+
+		return c.convertProjects(ghRepos), nil
+	})
+
+	if err != nil {
+		return nil, err
 	}
-
-	return c.convertProjects(ghRepos), nil
+	return result.([]domain.Project), nil
 }
 
 // GetLatestPipeline retrieves the most recent workflow run for a repository and branch.
 func (c *Client) GetLatestPipeline(ctx context.Context, projectID, branch string) (*domain.Pipeline, error) {
-	// projectID format: "owner/repo"
-	url := fmt.Sprintf("%s/repos/%s/actions/runs?branch=%s&per_page=1", c.baseURL, projectID, branch)
+	key := fmt.Sprintf("GetLatestPipeline:%s:%s", projectID, branch)
 
-	var response githubWorkflowRunsResponse
-	if err := c.doRequest(ctx, url, &response); err != nil {
-		return nil, fmt.Errorf("failed to get workflow runs: %w", err)
+	result, err := c.doRequestWithDedup(ctx, key, func() (interface{}, error) {
+		// projectID format: "owner/repo"
+		url := fmt.Sprintf("%s/repos/%s/actions/runs?branch=%s&per_page=1", c.baseURL, projectID, branch)
+
+		var response githubWorkflowRunsResponse
+		if err := c.doRequest(ctx, url, &response); err != nil {
+			return nil, fmt.Errorf("failed to get workflow runs: %w", err)
+		}
+
+		if len(response.WorkflowRuns) == 0 {
+			return (*domain.Pipeline)(nil), nil
+		}
+
+		return c.convertPipeline(response.WorkflowRuns[0], projectID), nil
+	})
+
+	if err != nil {
+		return nil, err
 	}
-
-	if len(response.WorkflowRuns) == 0 {
-		return nil, nil
-	}
-
-	return c.convertPipeline(response.WorkflowRuns[0], projectID), nil
+	return result.(*domain.Pipeline), nil
 }
 
 // GetPipelines retrieves recent workflow runs for a repository.
 func (c *Client) GetPipelines(ctx context.Context, projectID string, limit int) ([]domain.Pipeline, error) {
-	url := fmt.Sprintf("%s/repos/%s/actions/runs?per_page=%d", c.baseURL, projectID, limit)
+	key := fmt.Sprintf("GetPipelines:%s:%d", projectID, limit)
 
-	var response githubWorkflowRunsResponse
-	if err := c.doRequest(ctx, url, &response); err != nil {
-		return nil, fmt.Errorf("failed to get workflow runs: %w", err)
+	result, err := c.doRequestWithDedup(ctx, key, func() (interface{}, error) {
+		url := fmt.Sprintf("%s/repos/%s/actions/runs?per_page=%d", c.baseURL, projectID, limit)
+
+		var response githubWorkflowRunsResponse
+		if err := c.doRequest(ctx, url, &response); err != nil {
+			return nil, fmt.Errorf("failed to get workflow runs: %w", err)
+		}
+
+		pipelines := make([]domain.Pipeline, len(response.WorkflowRuns))
+		for i, run := range response.WorkflowRuns {
+			pipelines[i] = *c.convertPipeline(run, projectID)
+		}
+
+		return pipelines, nil
+	})
+
+	if err != nil {
+		return nil, err
 	}
-
-	pipelines := make([]domain.Pipeline, len(response.WorkflowRuns))
-	for i, run := range response.WorkflowRuns {
-		pipelines[i] = *c.convertPipeline(run, projectID)
-	}
-
-	return pipelines, nil
+	return result.([]domain.Pipeline), nil
 }
 
 // GetWorkflowRuns retrieves runs for a specific workflow.
 func (c *Client) GetWorkflowRuns(ctx context.Context, projectID string, workflowID string, limit int) ([]domain.Pipeline, error) {
-	url := fmt.Sprintf("%s/repos/%s/actions/workflows/%s/runs?per_page=%d",
-		c.baseURL, projectID, workflowID, limit)
+	key := fmt.Sprintf("GetWorkflowRuns:%s:%s:%d", projectID, workflowID, limit)
 
-	var response githubWorkflowRunsResponse
-	if err := c.doRequest(ctx, url, &response); err != nil {
-		return nil, fmt.Errorf("failed to get workflow runs: %w", err)
+	result, err := c.doRequestWithDedup(ctx, key, func() (interface{}, error) {
+		url := fmt.Sprintf("%s/repos/%s/actions/workflows/%s/runs?per_page=%d",
+			c.baseURL, projectID, workflowID, limit)
+
+		var response githubWorkflowRunsResponse
+		if err := c.doRequest(ctx, url, &response); err != nil {
+			return nil, fmt.Errorf("failed to get workflow runs: %w", err)
+		}
+
+		pipelines := make([]domain.Pipeline, len(response.WorkflowRuns))
+		for i, run := range response.WorkflowRuns {
+			pipelines[i] = *c.convertPipeline(run, projectID)
+		}
+
+		return pipelines, nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+	return result.([]domain.Pipeline), nil
+}
+
+// GetBranches retrieves branches for a repository.
+func (c *Client) GetBranches(ctx context.Context, projectID string, limit int) ([]domain.Branch, error) {
+	perPage := limit
+	if perPage == 0 || perPage > 100 {
+		perPage = 100
 	}
 
-	pipelines := make([]domain.Pipeline, len(response.WorkflowRuns))
-	for i, run := range response.WorkflowRuns {
-		pipelines[i] = *c.convertPipeline(run, projectID)
-	}
+	key := fmt.Sprintf("GetBranches:%s:%d", projectID, perPage)
 
-	return pipelines, nil
+	result, err := c.doRequestWithDedup(ctx, key, func() (interface{}, error) {
+		// projectID format: "owner/repo"
+		url := fmt.Sprintf("%s/repos/%s/branches?per_page=%d", c.baseURL, projectID, perPage)
+
+		var ghBranches []githubBranch
+		if err := c.doRequest(ctx, url, &ghBranches); err != nil {
+			return nil, fmt.Errorf("failed to get branches: %w", err)
+		}
+
+		branches := make([]domain.Branch, len(ghBranches))
+		for i, ghb := range ghBranches {
+			branches[i] = c.convertBranch(ghb, projectID)
+		}
+
+		return branches, nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+	return result.([]domain.Branch), nil
 }
 
 // doRequest performs an HTTP request to GitHub API with rate limit handling.
@@ -305,6 +464,26 @@ func convertStatus(status, conclusion string) domain.Status {
 	}
 }
 
+// convertBranch converts GitHub branch to domain model.
+func (c *Client) convertBranch(ghb githubBranch, projectID string) domain.Branch {
+	// Parse owner/repo to construct branch URL
+	webURL := fmt.Sprintf("https://github.com/%s/tree/%s", projectID, ghb.Name)
+
+	return domain.Branch{
+		Name:           ghb.Name,
+		ProjectID:      projectID,
+		Repository:     projectID,
+		LastCommitSHA:  ghb.Commit.SHA,
+		LastCommitMsg:  "", // GitHub branches API doesn't include message
+		LastCommitDate: time.Time{}, // Not available in branches list
+		CommitAuthor:   "", // Not available in branches list
+		IsDefault:      false, // Need separate API call to determine
+		IsProtected:    ghb.Protected,
+		WebURL:         webURL,
+		Platform:       "github",
+	}
+}
+
 // GitHub API response types
 type githubRepository struct {
 	ID       int    `json:"id"`
@@ -330,43 +509,70 @@ type githubWorkflowRun struct {
 	UpdatedAt  time.Time `json:"updated_at"`
 }
 
+type githubBranch struct {
+	Name      string `json:"name"`
+	Protected bool   `json:"protected"`
+	Commit    struct {
+		SHA string `json:"sha"`
+		URL string `json:"url"`
+	} `json:"commit"`
+}
+
 // GetMergeRequests retrieves open pull requests for a repository.
 func (c *Client) GetMergeRequests(ctx context.Context, projectID string) ([]domain.MergeRequest, error) {
-	// projectID format: "owner/repo"
-	url := fmt.Sprintf("%s/repos/%s/pulls?state=open&per_page=50", c.baseURL, projectID)
+	key := fmt.Sprintf("GetMergeRequests:%s", projectID)
 
-	var ghPRs []githubPullRequest
-	if err := c.doRequest(ctx, url, &ghPRs); err != nil {
-		return nil, fmt.Errorf("failed to get pull requests: %w", err)
+	result, err := c.doRequestWithDedup(ctx, key, func() (interface{}, error) {
+		// projectID format: "owner/repo"
+		url := fmt.Sprintf("%s/repos/%s/pulls?state=open&per_page=50", c.baseURL, projectID)
+
+		var ghPRs []githubPullRequest
+		if err := c.doRequest(ctx, url, &ghPRs); err != nil {
+			return nil, fmt.Errorf("failed to get pull requests: %w", err)
+		}
+
+		mrs := make([]domain.MergeRequest, len(ghPRs))
+		for i, pr := range ghPRs {
+			mrs[i] = c.convertPullRequest(pr, projectID)
+		}
+
+		return mrs, nil
+	})
+
+	if err != nil {
+		return nil, err
 	}
-
-	mrs := make([]domain.MergeRequest, len(ghPRs))
-	for i, pr := range ghPRs {
-		mrs[i] = c.convertPullRequest(pr, projectID)
-	}
-
-	return mrs, nil
+	return result.([]domain.MergeRequest), nil
 }
 
 // GetIssues retrieves open issues for a repository.
 func (c *Client) GetIssues(ctx context.Context, projectID string) ([]domain.Issue, error) {
-	// projectID format: "owner/repo"
-	url := fmt.Sprintf("%s/repos/%s/issues?state=open&per_page=50", c.baseURL, projectID)
+	key := fmt.Sprintf("GetIssues:%s", projectID)
 
-	var ghIssues []githubIssue
-	if err := c.doRequest(ctx, url, &ghIssues); err != nil {
-		return nil, fmt.Errorf("failed to get issues: %w", err)
-	}
+	result, err := c.doRequestWithDedup(ctx, key, func() (interface{}, error) {
+		// projectID format: "owner/repo"
+		url := fmt.Sprintf("%s/repos/%s/issues?state=open&per_page=50", c.baseURL, projectID)
 
-	// Filter out pull requests (GitHub API returns both issues and PRs in /issues endpoint)
-	var issues []domain.Issue
-	for _, ghIssue := range ghIssues {
-		if ghIssue.PullRequest == nil {
-			issues = append(issues, c.convertIssue(ghIssue, projectID))
+		var ghIssues []githubIssue
+		if err := c.doRequest(ctx, url, &ghIssues); err != nil {
+			return nil, fmt.Errorf("failed to get issues: %w", err)
 		}
-	}
 
-	return issues, nil
+		// Filter out pull requests (GitHub API returns both issues and PRs in /issues endpoint)
+		var issues []domain.Issue
+		for _, ghIssue := range ghIssues {
+			if ghIssue.PullRequest == nil {
+				issues = append(issues, c.convertIssue(ghIssue, projectID))
+			}
+		}
+
+		return issues, nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+	return result.([]domain.Issue), nil
 }
 
 // convertPullRequest converts GitHub PR to domain MergeRequest.

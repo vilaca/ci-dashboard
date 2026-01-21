@@ -56,7 +56,9 @@ func buildServer(cfg *config.Config) http.Handler {
 	// Create shared dependencies
 	logger := dashboard.NewStdLogger()
 	renderer := dashboard.NewHTMLRenderer()
-	httpClient := &http.Client{}
+	httpClient := &http.Client{
+		Timeout: 30 * time.Second, // Set reasonable timeout for API requests
+	}
 
 	// Create pipeline service with whitelists
 	pipelineService := service.NewPipelineService(
@@ -90,7 +92,7 @@ func buildServer(cfg *config.Config) http.Handler {
 	}
 
 	// Create handler with dependencies (Dependency Injection)
-	handler := dashboard.NewHandler(renderer, logger, pipelineService, cfg.RunsPerRepository, cfg.RecentPipelinesLimit)
+	handler := dashboard.NewHandler(renderer, logger, pipelineService, cfg.RunsPerRepository, cfg.RecentPipelinesLimit, cfg.GitLabCurrentUser, cfg.GitHubCurrentUser)
 
 	// Register routes
 	mux := http.NewServeMux()

@@ -38,13 +38,13 @@ func (c *CachingClient) GetProjects(ctx context.Context) ([]domain.Project, erro
 	// Try cache first
 	if cached, found := c.cache.get(key); found {
 		if projects, ok := cached.([]domain.Project); ok {
-			log.Printf("Cache hit: %s (%d projects)", key, len(projects))
+			log.Printf("[Cache] %s - HIT (%d projects)", key, len(projects))
 			return projects, nil
 		}
 	}
 
 	// Cache miss - fetch from underlying client
-	log.Printf("Cache miss: %s - fetching from API", key)
+	log.Printf("[Cache] %s - MISS", key)
 	projects, err := c.client.GetProjects(ctx)
 	if err != nil {
 		return nil, err
@@ -52,7 +52,6 @@ func (c *CachingClient) GetProjects(ctx context.Context) ([]domain.Project, erro
 
 	// Store in cache
 	c.cache.set(key, projects)
-	log.Printf("Cached: %s (%d projects)", key, len(projects))
 
 	return projects, nil
 }
@@ -64,11 +63,13 @@ func (c *CachingClient) GetLatestPipeline(ctx context.Context, projectID, branch
 	// Try cache first
 	if cached, found := c.cache.get(key); found {
 		if pipeline, ok := cached.(*domain.Pipeline); ok {
+			log.Printf("[Cache] %s - HIT", key)
 			return pipeline, nil
 		}
 	}
 
 	// Cache miss - fetch from underlying client
+	log.Printf("[Cache] %s - MISS", key)
 	pipeline, err := c.client.GetLatestPipeline(ctx, projectID, branch)
 	if err != nil {
 		return nil, err
@@ -87,11 +88,13 @@ func (c *CachingClient) GetPipelines(ctx context.Context, projectID string, limi
 	// Try cache first
 	if cached, found := c.cache.get(key); found {
 		if pipelines, ok := cached.([]domain.Pipeline); ok {
+			log.Printf("[Cache] %s - HIT (%d pipelines)", key, len(pipelines))
 			return pipelines, nil
 		}
 	}
 
 	// Cache miss - fetch from underlying client
+	log.Printf("[Cache] %s - MISS", key)
 	pipelines, err := c.client.GetPipelines(ctx, projectID, limit)
 	if err != nil {
 		return nil, err
@@ -101,6 +104,31 @@ func (c *CachingClient) GetPipelines(ctx context.Context, projectID string, limi
 	c.cache.set(key, pipelines)
 
 	return pipelines, nil
+}
+
+// GetBranches retrieves branches with caching.
+func (c *CachingClient) GetBranches(ctx context.Context, projectID string, limit int) ([]domain.Branch, error) {
+	key := fmt.Sprintf("GetBranches:%s:%d", projectID, limit)
+
+	// Try cache first
+	if cached, found := c.cache.get(key); found {
+		if branches, ok := cached.([]domain.Branch); ok {
+			log.Printf("[Cache] %s - HIT (%d branches)", key, len(branches))
+			return branches, nil
+		}
+	}
+
+	// Cache miss - fetch from underlying client
+	log.Printf("[Cache] %s - MISS", key)
+	branches, err := c.client.GetBranches(ctx, projectID, limit)
+	if err != nil {
+		return nil, err
+	}
+
+	// Store in cache
+	c.cache.set(key, branches)
+
+	return branches, nil
 }
 
 // GetMergeRequests retrieves merge requests with caching (ExtendedClient).
@@ -114,11 +142,13 @@ func (c *CachingClient) GetMergeRequests(ctx context.Context, projectID string) 
 	// Try cache first
 	if cached, found := c.cache.get(key); found {
 		if mrs, ok := cached.([]domain.MergeRequest); ok {
+			log.Printf("[Cache] %s - HIT (%d MRs)", key, len(mrs))
 			return mrs, nil
 		}
 	}
 
 	// Cache miss - fetch from underlying client
+	log.Printf("[Cache] %s - MISS", key)
 	mrs, err := c.extendedClient.GetMergeRequests(ctx, projectID)
 	if err != nil {
 		return nil, err
@@ -141,11 +171,13 @@ func (c *CachingClient) GetIssues(ctx context.Context, projectID string) ([]doma
 	// Try cache first
 	if cached, found := c.cache.get(key); found {
 		if issues, ok := cached.([]domain.Issue); ok {
+			log.Printf("[Cache] %s - HIT (%d issues)", key, len(issues))
 			return issues, nil
 		}
 	}
 
 	// Cache miss - fetch from underlying client
+	log.Printf("[Cache] %s - MISS", key)
 	issues, err := c.extendedClient.GetIssues(ctx, projectID)
 	if err != nil {
 		return nil, err

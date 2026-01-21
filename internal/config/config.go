@@ -34,6 +34,10 @@ type Config struct {
 	// Cache configuration
 	GitLabCacheDurationSeconds int // Duration to cache GitLab API responses (default: 300 = 5 minutes)
 	GitHubCacheDurationSeconds int // Duration to cache GitHub API responses (default: 300 = 5 minutes)
+
+	// Current user configuration (for filtering "your branches")
+	GitLabCurrentUser string // GitLab username for filtering branches (from GITLAB_USER)
+	GitHubCurrentUser string // GitHub username for filtering branches (from GITHUB_USER)
 }
 
 // yamlConfig represents the YAML file structure.
@@ -44,12 +48,14 @@ type yamlConfig struct {
 		Token                string   `yaml:"token"`
 		WatchedRepos         []string `yaml:"watched_repos"`
 		CacheDurationSeconds int      `yaml:"cache_duration_seconds"`
+		CurrentUser          string   `yaml:"current_user"`
 	} `yaml:"gitlab"`
 	GitHub struct {
 		URL                  string   `yaml:"url"`
 		Token                string   `yaml:"token"`
 		WatchedRepos         []string `yaml:"watched_repos"`
 		CacheDurationSeconds int      `yaml:"cache_duration_seconds"`
+		CurrentUser          string   `yaml:"current_user"`
 	} `yaml:"github"`
 	Display struct {
 		RunsPerRepository    int `yaml:"runs_per_repository"`
@@ -169,6 +175,27 @@ func Load() (*Config, error) {
 		githubCacheDuration = yc.GitHub.CacheDurationSeconds
 	}
 
+	// Load current user configuration with fallback
+	currentUser := os.Getenv("CURRENT_USER") // Common fallback
+
+	gitlabCurrentUser := os.Getenv("GITLAB_USER")
+	if gitlabCurrentUser == "" {
+		if yc.GitLab.CurrentUser != "" {
+			gitlabCurrentUser = yc.GitLab.CurrentUser
+		} else {
+			gitlabCurrentUser = currentUser
+		}
+	}
+
+	githubCurrentUser := os.Getenv("GITHUB_USER")
+	if githubCurrentUser == "" {
+		if yc.GitHub.CurrentUser != "" {
+			githubCurrentUser = yc.GitHub.CurrentUser
+		} else {
+			githubCurrentUser = currentUser
+		}
+	}
+
 	return &Config{
 		Port:                       port,
 		GitLabURL:                  gitlabURL,
@@ -181,6 +208,8 @@ func Load() (*Config, error) {
 		RecentPipelinesLimit:       recentLimit,
 		GitLabCacheDurationSeconds: gitlabCacheDuration,
 		GitHubCacheDurationSeconds: githubCacheDuration,
+		GitLabCurrentUser:          gitlabCurrentUser,
+		GitHubCurrentUser:          githubCurrentUser,
 	}, nil
 }
 

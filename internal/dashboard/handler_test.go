@@ -107,6 +107,16 @@ func (m *mockRenderer) RenderIssues(w io.Writer, issues []domain.Issue) error {
 	return err
 }
 
+func (m *mockRenderer) RenderBranches(w io.Writer, branches []domain.BranchWithPipeline) error {
+	_, err := w.Write([]byte("mock branches"))
+	return err
+}
+
+func (m *mockRenderer) RenderYourBranches(w io.Writer, branches []domain.BranchWithPipeline, gitlabUsername, githubUsername string) error {
+	_, err := w.Write([]byte("mock your branches"))
+	return err
+}
+
 // mockLogger is a test double for Logger.
 type mockLogger struct {
 	messages []string
@@ -192,6 +202,14 @@ func (m *mockPipelineService) GetAllIssues(ctx context.Context) ([]domain.Issue,
 	return []domain.Issue{}, nil
 }
 
+func (m *mockPipelineService) GetBranchesWithPipelines(ctx context.Context, limit int) ([]domain.BranchWithPipeline, error) {
+	return []domain.BranchWithPipeline{}, nil
+}
+
+func (m *mockPipelineService) FilterBranchesByAuthor(branches []domain.BranchWithPipeline, gitlabUsername, githubUsername string) []domain.BranchWithPipeline {
+	return branches
+}
+
 // TestHandleHealth tests the health check endpoint.
 // Follows AAA (Arrange, Act, Assert) and FIRST principles.
 func TestHandleHealth(t *testing.T) {
@@ -199,7 +217,7 @@ func TestHandleHealth(t *testing.T) {
 	renderer := &mockRenderer{}
 	logger := &mockLogger{}
 	pipelineService := &mockPipelineService{}
-	handler := NewHandler(renderer, logger, pipelineService, 3, 50)
+	handler := NewHandler(renderer, logger, pipelineService, 3, 50, "", "")
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 
@@ -231,7 +249,7 @@ func TestHandleHealth_RenderError(t *testing.T) {
 	renderer := &mockRenderer{healthErr: errors.New("render error")}
 	logger := &mockLogger{}
 	pipelineService := &mockPipelineService{}
-	handler := NewHandler(renderer, logger, pipelineService, 3, 50)
+	handler := NewHandler(renderer, logger, pipelineService, 3, 50, "", "")
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 
@@ -257,7 +275,7 @@ func TestHandleIndex(t *testing.T) {
 	renderer := &mockRenderer{}
 	logger := &mockLogger{}
 	pipelineService := &mockPipelineService{}
-	handler := NewHandler(renderer, logger, pipelineService, 3, 50)
+	handler := NewHandler(renderer, logger, pipelineService, 3, 50, "", "")
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 
@@ -288,7 +306,7 @@ func TestHandleIndex_RenderError(t *testing.T) {
 	renderer := &mockRenderer{repositoriesErr: errors.New("render error")}
 	logger := &mockLogger{}
 	pipelineService := &mockPipelineService{}
-	handler := NewHandler(renderer, logger, pipelineService, 3, 50)
+	handler := NewHandler(renderer, logger, pipelineService, 3, 50, "", "")
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 
@@ -320,7 +338,7 @@ func TestHandlePipelines(t *testing.T) {
 			}, nil
 		},
 	}
-	handler := NewHandler(renderer, logger, pipelineService, 3, 50)
+	handler := NewHandler(renderer, logger, pipelineService, 3, 50, "", "")
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 
@@ -350,7 +368,7 @@ func TestHandlePipelines_ServiceError(t *testing.T) {
 			return nil, errors.New("service error")
 		},
 	}
-	handler := NewHandler(renderer, logger, pipelineService, 3, 50)
+	handler := NewHandler(renderer, logger, pipelineService, 3, 50, "", "")
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 
@@ -378,7 +396,7 @@ func TestNewHandler(t *testing.T) {
 	pipelineService := &mockPipelineService{}
 
 	// Act
-	handler := NewHandler(renderer, logger, pipelineService, 3, 50)
+	handler := NewHandler(renderer, logger, pipelineService, 3, 50, "", "")
 
 	// Assert
 	if handler == nil {

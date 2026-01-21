@@ -12,11 +12,13 @@ import (
 // Handler handles HTTP requests for the dashboard.
 // Each handler method has a Single Responsibility (SRP).
 type Handler struct {
-	renderer        Renderer
-	logger          Logger
-	pipelineService PipelineService
-	runsPerRepo     int
-	recentLimit     int
+	renderer          Renderer
+	logger            Logger
+	pipelineService   PipelineService
+	runsPerRepo       int
+	recentLimit       int
+	gitlabCurrentUser string
+	githubCurrentUser string
 }
 
 // Logger interface for logging operations (Interface Segregation Principle).
@@ -35,6 +37,8 @@ type PipelineService interface {
 	GetRecentPipelines(ctx context.Context, totalLimit int) ([]domain.Pipeline, error)
 	GetAllMergeRequests(ctx context.Context) ([]domain.MergeRequest, error)
 	GetAllIssues(ctx context.Context) ([]domain.Issue, error)
+	GetBranchesWithPipelines(ctx context.Context, limit int) ([]domain.BranchWithPipeline, error)
+	FilterBranchesByAuthor(branches []domain.BranchWithPipeline, gitlabUsername, githubUsername string) []domain.BranchWithPipeline
 }
 
 // RepositoryWithRuns is imported from service package
@@ -42,13 +46,15 @@ type RepositoryWithRuns = service.RepositoryWithRuns
 
 // NewHandler creates a new Handler with injected dependencies (Dependency Inversion Principle).
 // This follows IoC (Inversion of Control) by accepting dependencies rather than creating them.
-func NewHandler(renderer Renderer, logger Logger, pipelineService PipelineService, runsPerRepo, recentLimit int) *Handler {
+func NewHandler(renderer Renderer, logger Logger, pipelineService PipelineService, runsPerRepo, recentLimit int, gitlabCurrentUser, githubCurrentUser string) *Handler {
 	return &Handler{
-		renderer:        renderer,
-		logger:          logger,
-		pipelineService: pipelineService,
-		runsPerRepo:     runsPerRepo,
-		recentLimit:     recentLimit,
+		renderer:          renderer,
+		logger:            logger,
+		pipelineService:   pipelineService,
+		runsPerRepo:       runsPerRepo,
+		recentLimit:       recentLimit,
+		gitlabCurrentUser: gitlabCurrentUser,
+		githubCurrentUser: githubCurrentUser,
 	}
 }
 
@@ -62,6 +68,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/pipelines/failed", h.handleFailedPipelines)
 	mux.HandleFunc("/pipelines/grouped", h.handlePipelinesGrouped)
 	mux.HandleFunc("/pipelines/workflow", h.handleWorkflowRuns)
+	mux.HandleFunc("/branches", h.handleBranches)
+	mux.HandleFunc("/your-branches", h.handleYourBranches)
 	mux.HandleFunc("/mrs", h.handleMergeRequests)
 	mux.HandleFunc("/issues", h.handleIssues)
 }
@@ -323,6 +331,46 @@ func (h *Handler) handleIssues(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 }
+
+// handleBranches serves the branches page showing all branches.
+func (h *Handler) handleBranches(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html")
+
+	branches, err := h.pipelineService.GetBranchesWithPipelines(r.Context(), 50)
+	if err != nil {
+		h.logger.Printf("failed to get branches: %v", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	if err := h.renderer.RenderBranches(w, branches); err != nil {
+		h.logger.Printf("failed to render branches: %v", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+}
+
+// handleYourBranches serves branches filtered by current user.
+func (h *Handler) handleYourBranches(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html")
+
+	branches, err := h.pipelineService.GetBranchesWithPipelines(r.Context(), 50)
+	if err != nil {
+		h.logger.Printf("failed to get branches: %v", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	// Filter by current user
+	filteredBranches := h.pipelineService.FilterBranchesByAuthor(branches, h.gitlabCurrentUser, h.githubCurrentUser)
+
+	if err := h.renderer.RenderYourBranches(w, filteredBranches, h.gitlabCurrentUser, h.githubCurrentUser); err != nil {
+		h.logger.Printf("failed to render your branches: %v", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+}
+
 // StdLogger wraps the standard log package to implement Logger interface.
 type StdLogger struct{}
 

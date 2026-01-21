@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -35,6 +36,14 @@ func (s *PipelineService) RegisterClient(platform string, client api.Client) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.clients[platform] = client
+}
+
+// getClientForPlatform returns the appropriate client for a given platform.
+// Returns nil if no client is registered for the platform.
+func (s *PipelineService) getClientForPlatform(platform string) api.Client {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.clients[platform]
 }
 
 // isWhitelisted checks if a project is in the appropriate whitelist.
@@ -243,8 +252,9 @@ func (s *PipelineService) GetRepositoriesWithRecentRuns(ctx context.Context, run
 
 			var runs []domain.Pipeline
 
-			// Try to fetch pipelines from the appropriate client
-			for _, client := range s.clients {
+			// Get the appropriate client for this project's platform
+			client := s.getClientForPlatform(proj.Platform)
+			if client != nil {
 				pipelines, err := client.GetPipelines(ctx, proj.ID, runsPerRepo)
 				if err == nil && len(pipelines) > 0 {
 					// Fill in repository name from project
@@ -254,7 +264,6 @@ func (s *PipelineService) GetRepositoriesWithRecentRuns(ctx context.Context, run
 						}
 					}
 					runs = pipelines
-					break
 				}
 			}
 
@@ -327,8 +336,9 @@ func (s *PipelineService) GetRecentPipelines(ctx context.Context, totalLimit int
 		go func(proj domain.Project) {
 			defer wg.Done()
 
-			// Try to fetch pipelines from the appropriate client
-			for _, client := range s.clients {
+			// Get the appropriate client for this project's platform
+			client := s.getClientForPlatform(proj.Platform)
+			if client != nil {
 				pipelines, err := client.GetPipelines(ctx, proj.ID, pipelinesPerProject)
 				if err == nil && len(pipelines) > 0 {
 					// Fill in repository name from project
@@ -341,7 +351,6 @@ func (s *PipelineService) GetRecentPipelines(ctx context.Context, totalLimit int
 					mu.Lock()
 					allPipelines = append(allPipelines, pipelines...)
 					mu.Unlock()
-					break
 				}
 			}
 		}(project)
@@ -392,16 +401,16 @@ func (s *PipelineService) GetAllMergeRequests(ctx context.Context) ([]domain.Mer
 		go func(proj domain.Project) {
 			defer wg.Done()
 
-			// Check if client supports ExtendedClient interface
-			var client api.ExtendedClient
-			for _, c := range s.clients {
-				if ec, ok := c.(api.ExtendedClient); ok {
-					client = ec
-					break
-				}
+			// Get the appropriate client for this project's platform
+			c := s.getClientForPlatform(proj.Platform)
+			if c == nil {
+				results <- result{mrs: nil, err: nil}
+				return
 			}
 
-			if client == nil {
+			// Check if client supports ExtendedClient interface
+			client, ok := c.(api.ExtendedClient)
+			if !ok {
 				results <- result{mrs: nil, err: nil}
 				return
 			}
@@ -476,16 +485,16 @@ func (s *PipelineService) GetAllIssues(ctx context.Context) ([]domain.Issue, err
 		go func(proj domain.Project) {
 			defer wg.Done()
 
-			// Check if client supports ExtendedClient interface
-			var client api.ExtendedClient
-			for _, c := range s.clients {
-				if ec, ok := c.(api.ExtendedClient); ok {
-					client = ec
-					break
-				}
+			// Get the appropriate client for this project's platform
+			c := s.getClientForPlatform(proj.Platform)
+			if c == nil {
+				results <- result{issues: nil, err: nil}
+				return
 			}
 
-			if client == nil {
+			// Check if client supports ExtendedClient interface
+			client, ok := c.(api.ExtendedClient)
+			if !ok {
 				results <- result{issues: nil, err: nil}
 				return
 			}
@@ -533,4 +542,156 @@ func (s *PipelineService) GetAllIssues(ctx context.Context) ([]domain.Issue, err
 	}
 
 	return allIssues, nil
+}
+
+// GetAllBranches retrieves all branches across all projects.
+func (s *PipelineService) GetAllBranches(ctx context.Context, limit int) ([]domain.Branch, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	// Get all projects first
+	projects, err := s.GetAllProjects(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Fetch branches concurrently with limited concurrency
+	type result struct {
+		branches []domain.Branch
+		err      error
+	}
+
+	results := make(chan result, len(projects))
+	var wg sync.WaitGroup
+
+	for _, project := range projects {
+		wg.Add(1)
+		go func(proj domain.Project) {
+			defer wg.Done()
+
+			// Get the appropriate client for this project's platform
+			client := s.getClientForPlatform(proj.Platform)
+			if client != nil {
+				branches, err := client.GetBranches(ctx, proj.ID, limit)
+				if err == nil && len(branches) > 0 {
+					// Fill in repository name from project
+					for i := range branches {
+						if branches[i].Repository == proj.ID {
+							branches[i].Repository = proj.Name
+						}
+					}
+					results <- result{branches: branches, err: nil}
+					return
+				}
+			}
+
+			results <- result{branches: nil, err: nil}
+		}(project)
+	}
+
+	// Wait for all goroutines
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	// Collect all branches
+	var allBranches []domain.Branch
+	for r := range results {
+		if r.err != nil {
+			continue
+		}
+		allBranches = append(allBranches, r.branches...)
+	}
+
+	// Sort by last commit date (most recent first)
+	for i := 0; i < len(allBranches)-1; i++ {
+		for j := 0; j < len(allBranches)-i-1; j++ {
+			if allBranches[j].LastCommitDate.Before(allBranches[j+1].LastCommitDate) {
+				allBranches[j], allBranches[j+1] = allBranches[j+1], allBranches[j]
+			}
+		}
+	}
+
+	return allBranches, nil
+}
+
+// GetBranchesWithPipelines retrieves branches with their latest pipeline status.
+func (s *PipelineService) GetBranchesWithPipelines(ctx context.Context, limit int) ([]domain.BranchWithPipeline, error) {
+	branches, err := s.GetAllBranches(ctx, limit)
+	if err != nil {
+		return nil, err
+	}
+
+	// For each branch, try to get latest pipeline with limited concurrency
+	var results []domain.BranchWithPipeline
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	for _, branch := range branches {
+		wg.Add(1)
+		go func(b domain.Branch) {
+			defer wg.Done()
+
+			// Try to get latest pipeline for this branch
+			var pipeline *domain.Pipeline
+			client := s.getClientForPlatform(b.Platform)
+			if client != nil {
+				p, err := client.GetLatestPipeline(ctx, b.ProjectID, b.Name)
+				if err == nil && p != nil {
+					pipeline = p
+				}
+			}
+
+			mu.Lock()
+			results = append(results, domain.BranchWithPipeline{
+				Branch:   b,
+				Pipeline: pipeline,
+			})
+			mu.Unlock()
+		}(branch)
+	}
+
+	wg.Wait()
+
+	// Sort by branch commit date (most recent first)
+	for i := 0; i < len(results)-1; i++ {
+		for j := 0; j < len(results)-i-1; j++ {
+			if results[j].Branch.LastCommitDate.Before(results[j+1].Branch.LastCommitDate) {
+				results[j], results[j+1] = results[j+1], results[j]
+			}
+		}
+	}
+
+	return results, nil
+}
+
+// FilterBranchesByAuthor filters branches to those authored by the given usernames.
+// Matches against the CommitAuthor field (case-insensitive contains), platform-aware.
+func (s *PipelineService) FilterBranchesByAuthor(branches []domain.BranchWithPipeline, gitlabUsername, githubUsername string) []domain.BranchWithPipeline {
+	if gitlabUsername == "" && githubUsername == "" {
+		return branches
+	}
+
+	gitlabUsername = strings.ToLower(gitlabUsername)
+	githubUsername = strings.ToLower(githubUsername)
+
+	var filtered []domain.BranchWithPipeline
+
+	for _, b := range branches {
+		author := strings.ToLower(b.Branch.CommitAuthor)
+
+		// Match based on platform
+		if b.Branch.Platform == "gitlab" && gitlabUsername != "" {
+			if strings.Contains(author, gitlabUsername) {
+				filtered = append(filtered, b)
+			}
+		} else if b.Branch.Platform == "github" && githubUsername != "" {
+			if strings.Contains(author, githubUsername) {
+				filtered = append(filtered, b)
+			}
+		}
+	}
+
+	return filtered
 }

@@ -22,6 +22,8 @@ type Renderer interface {
 	RenderFailedPipelines(w io.Writer, pipelines []domain.Pipeline) error
 	RenderMergeRequests(w io.Writer, mrs []domain.MergeRequest) error
 	RenderIssues(w io.Writer, issues []domain.Issue) error
+	RenderBranches(w io.Writer, branches []domain.BranchWithPipeline) error
+	RenderYourBranches(w io.Writer, branches []domain.BranchWithPipeline, gitlabUsername, githubUsername string) error
 }
 
 // HTMLRenderer implements Renderer for HTML responses.

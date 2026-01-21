@@ -694,6 +694,8 @@ func buildNavigation() string {
 			<a href="/">Repositories</a>
 			<a href="/pipelines">Recent Pipelines</a>
 			<a href="/pipelines/failed">Failed Pipelines</a>
+			<a href="/branches">Branches</a>
+			<a href="/your-branches">Your Branches</a>
 			<a href="/mrs">Open MRs/PRs</a>
 			<a href="/issues">Open Issues</a>
 			<button class="theme-toggle" onclick="toggleTheme()" aria-label="Toggle theme">🌙 Dark Mode</button>

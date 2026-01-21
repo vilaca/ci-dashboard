@@ -18,6 +18,10 @@ type Client interface {
 
 	// GetPipelines returns recent pipelines for a given project.
 	GetPipelines(ctx context.Context, projectID string, limit int) ([]domain.Pipeline, error)
+
+	// GetBranches returns branches for a given project.
+	// limit controls max branches to return (0 = all branches).
+	GetBranches(ctx context.Context, projectID string, limit int) ([]domain.Branch, error)
 }
 
 // WorkflowClient extends Client with workflow-specific operations.

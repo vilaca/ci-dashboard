@@ -990,3 +990,283 @@ func (r *HTMLRenderer) writeIssueRow(sb *strings.Builder, issue domain.Issue) {
 		formatTimeAgo(issue.UpdatedAt),
 		externalLink(issue.WebURL, "View →")))
 }
+
+// RenderBranches renders all branches with their latest pipeline status.
+func (r *HTMLRenderer) RenderBranches(w io.Writer, branches []domain.BranchWithPipeline) error {
+	var sb strings.Builder
+
+	sb.WriteString(htmlHead("Branches", "View all branches across repositories"))
+	sb.WriteString(pageCSS(`
+		.branches-table { width: 100%; background: var(--bg-secondary); border-radius: 8px; box-shadow: 0 2px 4px var(--shadow); overflow: hidden; transition: background-color 0.3s; }
+		.branches-table table { width: 100%; border-collapse: collapse; }
+		.branches-table th { background: var(--bg-primary); padding: 15px; text-align: left; font-weight: 600; color: var(--text-primary); border-bottom: 2px solid var(--border-color); }
+		.branches-table td { padding: 15px; border-bottom: 1px solid var(--border-color); color: var(--text-primary); }
+		.branches-table tr:hover { background: var(--bg-primary); }
+		.branch-name { font-weight: 500; }
+		.branch-badges { display: flex; gap: 5px; margin-top: 5px; }
+		.badge { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 600; }
+		.badge-default { background: var(--running-bg); color: var(--running-text); }
+		.badge-protected { background: var(--pending-bg); color: var(--pending-text); }
+		.commit-msg { font-size: 13px; color: var(--text-secondary); margin-top: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 400px; }
+		.repo-link { color: var(--text-primary); text-decoration: none; }
+		.repo-link:hover { color: var(--link-color); text-decoration: underline; }
+		@media (max-width: 768px) {
+			.branches-table { overflow-x: auto; }
+			.branches-table th, .branches-table td { padding: 10px; font-size: 14px; }
+		}
+	`))
+	sb.WriteString(`<body>
+`)
+	sb.WriteString(loadingSpinner())
+	sb.WriteString(`	<div class="container">
+		<h1>Branches</h1>
+`)
+	sb.WriteString(buildNavigation())
+	sb.WriteString("\n")
+
+	if len(branches) == 0 {
+		sb.WriteString(`		<div class="empty">No branches found. Configure GITLAB_TOKEN or GITHUB_TOKEN environment variables.</div>`)
+	} else {
+		sb.WriteString(fmt.Sprintf(`		<div class="filters">
+			<div class="filter-group">
+				<label for="filter-repo">Repository</label>
+				<select id="filter-repo"><option value="">All</option></select>
+			</div>
+			<div class="filter-group">
+				<label for="filter-branch">Branch Name</label>
+				<select id="filter-branch"><option value="">All</option></select>
+			</div>
+			<div class="filter-group">
+				<label for="filter-status">Pipeline Status</label>
+				<select id="filter-status"><option value="">All</option></select>
+			</div>
+			<div class="filter-group">
+				<label for="filter-author">Author</label>
+				<select id="filter-author"><option value="">All</option></select>
+			</div>
+			<span class="filter-count">%d items</span>
+		</div>
+		<div class="branches-table">
+			<table id="branches-table">
+				<thead>
+					<tr>
+						<th>Repository</th>
+						<th>Branch</th>
+						<th>Author</th>
+						<th>Last Commit</th>
+						<th>Pipeline Status</th>
+						<th>Actions</th>
+					</tr>
+				</thead>
+				<tbody>
+`, len(branches)))
+		for _, branch := range branches {
+			r.writeBranchRow(&sb, branch)
+		}
+		sb.WriteString(`				</tbody>
+			</table>
+		</div>
+		<script>
+			document.addEventListener('DOMContentLoaded', function() {
+				setupFilters('branches-table', [
+					{ inputId: 'filter-repo', attr: 'repo' },
+					{ inputId: 'filter-branch', attr: 'branch' },
+					{ inputId: 'filter-status', attr: 'status' },
+					{ inputId: 'filter-author', attr: 'author' }
+				]);
+			});
+		</script>
+`)
+	}
+
+	sb.WriteString(`	</div>`)
+	sb.WriteString(htmlFooter())
+
+	_, err := w.Write([]byte(sb.String()))
+	return err
+}
+
+// RenderYourBranches renders branches filtered by current user.
+func (r *HTMLRenderer) RenderYourBranches(w io.Writer, branches []domain.BranchWithPipeline, gitlabUsername, githubUsername string) error {
+	var sb strings.Builder
+
+	title := "Your Branches"
+	usernames := []string{}
+	if gitlabUsername != "" {
+		usernames = append(usernames, gitlabUsername)
+	}
+	if githubUsername != "" {
+		usernames = append(usernames, githubUsername)
+	}
+	if len(usernames) > 0 {
+		title = fmt.Sprintf("Branches by %s", strings.Join(usernames, ", "))
+	}
+
+	sb.WriteString(htmlHead(title, "View your branches"))
+	sb.WriteString(pageCSS(`
+		.branches-table { width: 100%; background: var(--bg-secondary); border-radius: 8px; box-shadow: 0 2px 4px var(--shadow); overflow: hidden; transition: background-color 0.3s; }
+		.branches-table table { width: 100%; border-collapse: collapse; }
+		.branches-table th { background: var(--bg-primary); padding: 15px; text-align: left; font-weight: 600; color: var(--text-primary); border-bottom: 2px solid var(--border-color); }
+		.branches-table td { padding: 15px; border-bottom: 1px solid var(--border-color); color: var(--text-primary); }
+		.branches-table tr:hover { background: var(--bg-primary); }
+		.branch-name { font-weight: 500; }
+		.branch-badges { display: flex; gap: 5px; margin-top: 5px; }
+		.badge { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 600; }
+		.badge-default { background: var(--running-bg); color: var(--running-text); }
+		.badge-protected { background: var(--pending-bg); color: var(--pending-text); }
+		.commit-msg { font-size: 13px; color: var(--text-secondary); margin-top: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 400px; }
+		.repo-link { color: var(--text-primary); text-decoration: none; }
+		.repo-link:hover { color: var(--link-color); text-decoration: underline; }
+		.user-notice { background: var(--running-bg); color: var(--running-text); padding: 15px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid var(--running-text); }
+		@media (max-width: 768px) {
+			.branches-table { overflow-x: auto; }
+			.branches-table th, .branches-table td { padding: 10px; font-size: 14px; }
+		}
+	`))
+	sb.WriteString(`<body>
+`)
+	sb.WriteString(loadingSpinner())
+	sb.WriteString(fmt.Sprintf(`	<div class="container">
+		<h1>%s</h1>
+`, title))
+	sb.WriteString(buildNavigation())
+
+	if gitlabUsername == "" && githubUsername == "" {
+		sb.WriteString(`
+		<div class="user-notice">
+			No GITLAB_USER or GITHUB_USER configured. Set these environment variables to filter branches.
+		</div>
+`)
+	}
+
+	if len(branches) == 0 {
+		if gitlabUsername == "" && githubUsername == "" {
+			sb.WriteString(`		<div class="empty">No branches found. Configure GITLAB_TOKEN or GITHUB_TOKEN environment variables.</div>`)
+		} else {
+			sb.WriteString(fmt.Sprintf(`		<div class="empty">No branches found authored by %s.</div>`, escapeHTML(strings.Join(usernames, ", "))))
+		}
+	} else {
+		sb.WriteString(fmt.Sprintf(`		<div class="filters">
+			<div class="filter-group">
+				<label for="filter-repo">Repository</label>
+				<select id="filter-repo"><option value="">All</option></select>
+			</div>
+			<div class="filter-group">
+				<label for="filter-branch">Branch Name</label>
+				<select id="filter-branch"><option value="">All</option></select>
+			</div>
+			<div class="filter-group">
+				<label for="filter-status">Pipeline Status</label>
+				<select id="filter-status"><option value="">All</option></select>
+			</div>
+			<span class="filter-count">%d items</span>
+		</div>
+		<div class="branches-table">
+			<table id="branches-table">
+				<thead>
+					<tr>
+						<th>Repository</th>
+						<th>Branch</th>
+						<th>Last Commit</th>
+						<th>Pipeline Status</th>
+						<th>Actions</th>
+					</tr>
+				</thead>
+				<tbody>
+`, len(branches)))
+		for _, branch := range branches {
+			r.writeBranchRow(&sb, branch)
+		}
+		sb.WriteString(`				</tbody>
+			</table>
+		</div>
+		<script>
+			document.addEventListener('DOMContentLoaded', function() {
+				setupFilters('branches-table', [
+					{ inputId: 'filter-repo', attr: 'repo' },
+					{ inputId: 'filter-branch', attr: 'branch' },
+					{ inputId: 'filter-status', attr: 'status' }
+				]);
+			});
+		</script>
+`)
+	}
+
+	sb.WriteString(`	</div>`)
+	sb.WriteString(htmlFooter())
+
+	_, err := w.Write([]byte(sb.String()))
+	return err
+}
+
+// writeBranchRow writes a single branch row to the string builder.
+func (r *HTMLRenderer) writeBranchRow(sb *strings.Builder, bwp domain.BranchWithPipeline) {
+	branch := bwp.Branch
+	pipeline := bwp.Pipeline
+
+	// Determine pipeline status
+	statusClass := ""
+	if pipeline != nil {
+		statusClass = strings.ToLower(string(pipeline.Status))
+	}
+
+	// Build badges
+	badges := ""
+	if branch.IsDefault {
+		badges += `<span class="badge badge-default">DEFAULT</span>`
+	}
+	if branch.IsProtected {
+		badges += `<span class="badge badge-protected">PROTECTED</span>`
+	}
+
+	// Truncate commit message
+	commitMsg := branch.LastCommitMsg
+	if len(commitMsg) > 60 {
+		commitMsg = commitMsg[:60] + "..."
+	}
+
+	author := branch.CommitAuthor
+	if author == "" {
+		author = "—"
+	}
+
+	commitTime := formatTimeAgo(branch.LastCommitDate)
+	if branch.LastCommitDate.IsZero() {
+		commitTime = "—"
+	}
+
+	sb.WriteString(fmt.Sprintf(`					<tr data-repo="%s" data-branch="%s" data-status="%s" data-author="%s">
+						<td class="meta-text"><a href="/repository?id=%s" class="repo-link">%s</a></td>
+						<td>
+							<div class="branch-name">%s</div>
+							<div class="branch-badges">%s</div>
+						</td>
+						<td class="meta-text">%s</td>
+						<td>
+							<div class="commit-msg" title="%s">%s</div>
+							<div class="meta-text">%s</div>
+						</td>
+						<td>%s</td>
+						<td>%s</td>
+					</tr>
+`, escapeHTML(branch.Repository), escapeHTML(branch.Name), statusClass, escapeHTML(author),
+		branch.ProjectID, escapeHTML(branch.Repository),
+		escapeHTML(branch.Name), badges,
+		escapeHTML(author),
+		escapeHTML(branch.LastCommitMsg), escapeHTML(commitMsg),
+		commitTime,
+		r.formatBranchStatus(pipeline),
+		externalLink(branch.WebURL, "View Branch →")))
+}
+
+// formatBranchStatus formats the pipeline status badge for a branch.
+func (r *HTMLRenderer) formatBranchStatus(pipeline *domain.Pipeline) string {
+	if pipeline == nil {
+		return `<span class="meta-text">No pipeline</span>`
+	}
+
+	statusClass := strings.ToLower(string(pipeline.Status))
+	statusText := strings.ToUpper(string(pipeline.Status))
+
+	return fmt.Sprintf(`<span class="status-badge %s">%s</span>`, statusClass, statusText)
+}
