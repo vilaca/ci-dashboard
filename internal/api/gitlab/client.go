@@ -160,7 +160,7 @@ func (c *Client) GetLatestPipeline(ctx context.Context, projectID, branch string
 
 		var glPipelines []gitlabPipeline
 		if err := c.doRequest(ctx, url, &glPipelines); err != nil {
-			return nil, fmt.Errorf("failed to get pipeline: %w", err)
+			return nil, fmt.Errorf("failed to get pipeline (URL: %s): %w", url, err)
 		}
 
 		if len(glPipelines) == 0 {
@@ -185,7 +185,7 @@ func (c *Client) GetPipelines(ctx context.Context, projectID string, limit int) 
 
 		var glPipelines []gitlabPipeline
 		if err := c.doRequest(ctx, url, &glPipelines); err != nil {
-			return nil, fmt.Errorf("failed to get pipelines: %w", err)
+			return nil, fmt.Errorf("failed to get pipelines (URL: %s): %w", url, err)
 		}
 
 		pipelines := make([]domain.Pipeline, len(glPipelines))
@@ -216,7 +216,7 @@ func (c *Client) GetBranches(ctx context.Context, projectID string, limit int) (
 
 		var glBranches []gitlabBranch
 		if err := c.doRequest(ctx, url, &glBranches); err != nil {
-			return nil, fmt.Errorf("failed to get branches: %w", err)
+			return nil, fmt.Errorf("failed to get branches (URL: %s): %w", url, err)
 		}
 
 		branches := make([]domain.Branch, len(glBranches))
@@ -267,10 +267,12 @@ func (c *Client) convertProjects(glProjects []gitlabProject) []domain.Project {
 	projects := make([]domain.Project, len(glProjects))
 	for i, glp := range glProjects {
 		projects[i] = domain.Project{
-			ID:       fmt.Sprintf("%d", glp.ID),
-			Name:     glp.Name,
-			WebURL:   glp.WebURL,
-			Platform: "gitlab",
+			ID:            fmt.Sprintf("%d", glp.ID),
+			Name:          glp.Name,
+			WebURL:        glp.WebURL,
+			Platform:      "gitlab",
+			IsFork:        glp.ForkedFromProject != nil,
+			DefaultBranch: glp.DefaultBranch,
 		}
 	}
 	return projects
@@ -333,9 +335,16 @@ func convertStatus(glStatus string) domain.Status {
 
 // GitLab API response types
 type gitlabProject struct {
-	ID     int    `json:"id"`
-	Name   string `json:"name"`
-	WebURL string `json:"web_url"`
+	ID                int                `json:"id"`
+	Name              string             `json:"name"`
+	WebURL            string             `json:"web_url"`
+	DefaultBranch     string             `json:"default_branch"`
+	ForkedFromProject *gitlabProjectRef  `json:"forked_from_project,omitempty"`
+}
+
+type gitlabProjectRef struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
 }
 
 type gitlabPipeline struct {
@@ -410,6 +419,35 @@ func (c *Client) GetIssues(ctx context.Context, projectID string) ([]domain.Issu
 		return nil, err
 	}
 	return result.([]domain.Issue), nil
+}
+
+// GetCurrentUser retrieves the authenticated user's profile.
+func (c *Client) GetCurrentUser(ctx context.Context) (*domain.UserProfile, error) {
+	key := "GetCurrentUser"
+
+	result, err := c.doRequestWithDedup(ctx, key, func() (interface{}, error) {
+		url := fmt.Sprintf("%s/api/v4/user", c.baseURL)
+
+		var glUser gitlabUser
+		if err := c.doRequest(ctx, url, &glUser); err != nil {
+			return nil, fmt.Errorf("failed to get current user: %w", err)
+		}
+
+		profile := &domain.UserProfile{
+			Username:  glUser.Username,
+			Name:      glUser.Name,
+			AvatarURL: glUser.AvatarURL,
+			WebURL:    glUser.WebURL,
+			Platform:  "gitlab",
+		}
+
+		return profile, nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+	return result.(*domain.UserProfile), nil
 }
 
 // convertMergeRequest converts GitLab MR to domain MergeRequest.
@@ -488,6 +526,8 @@ type gitlabIssue struct {
 
 // GitLab User type
 type gitlabUser struct {
-	Username string `json:"username"`
-	Name     string `json:"name"`
+	Username  string `json:"username"`
+	Name      string `json:"name"`
+	AvatarURL string `json:"avatar_url"`
+	WebURL    string `json:"web_url"`
 }

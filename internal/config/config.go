@@ -32,8 +32,8 @@ type Config struct {
 	RecentPipelinesLimit int // Total number of pipelines to show in recent view
 
 	// Cache configuration
-	GitLabCacheDurationSeconds int // Duration to cache GitLab API responses (default: 300 = 5 minutes)
-	GitHubCacheDurationSeconds int // Duration to cache GitHub API responses (default: 300 = 5 minutes)
+	GitLabCacheDurationSeconds int // Duration to cache GitLab API responses (default: 1800 = 30 minutes)
+	GitHubCacheDurationSeconds int // Duration to cache GitHub API responses (default: 1800 = 30 minutes)
 
 	// Current user configuration (for filtering "your branches")
 	GitLabCurrentUser string // GitLab username for filtering branches (from GITLAB_USER)
@@ -157,7 +157,7 @@ func Load() (*Config, error) {
 		recentLimit = yc.Display.RecentPipelinesLimit
 	}
 
-	gitlabCacheDuration := 300 // 5 minutes default
+	gitlabCacheDuration := 1800 // 30 minutes default
 	if cacheStr := os.Getenv("GITLAB_CACHE_DURATION_SECONDS"); cacheStr != "" {
 		if c, err := strconv.Atoi(cacheStr); err == nil && c >= 0 {
 			gitlabCacheDuration = c
@@ -166,7 +166,7 @@ func Load() (*Config, error) {
 		gitlabCacheDuration = yc.GitLab.CacheDurationSeconds
 	}
 
-	githubCacheDuration := 300 // 5 minutes default
+	githubCacheDuration := 1800 // 30 minutes default
 	if cacheStr := os.Getenv("GITHUB_CACHE_DURATION_SECONDS"); cacheStr != "" {
 		if c, err := strconv.Atoi(cacheStr); err == nil && c >= 0 {
 			githubCacheDuration = c

@@ -1270,3 +1270,8 @@ func (r *HTMLRenderer) formatBranchStatus(pipeline *domain.Pipeline) string {
 
 	return fmt.Sprintf(`<span class="status-badge %s">%s</span>`, statusClass, statusText)
 }
+
+// RenderBranchesSkeleton renders a placeholder skeleton for branches.
+func (r *HTMLRenderer) RenderBranchesSkeleton(w io.Writer) error {
+	return r.RenderBranches(w, []domain.BranchWithPipeline{})
+}

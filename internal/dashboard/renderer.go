@@ -17,12 +17,14 @@ type Renderer interface {
 	RenderPipelines(w io.Writer, pipelines []domain.Pipeline) error
 	RenderPipelinesGrouped(w io.Writer, pipelinesByWorkflow map[string][]domain.Pipeline) error
 	RenderRepositories(w io.Writer, repositories []service.RepositoryWithRuns) error
+	RenderRepositoriesSkeleton(w io.Writer, userProfiles []domain.UserProfile) error
 	RenderRecentPipelines(w io.Writer, pipelines []domain.Pipeline) error
 	RenderRepositoryDetail(w io.Writer, repository service.RepositoryWithRuns, mrs []domain.MergeRequest, issues []domain.Issue) error
 	RenderFailedPipelines(w io.Writer, pipelines []domain.Pipeline) error
 	RenderMergeRequests(w io.Writer, mrs []domain.MergeRequest) error
 	RenderIssues(w io.Writer, issues []domain.Issue) error
 	RenderBranches(w io.Writer, branches []domain.BranchWithPipeline) error
+	RenderBranchesSkeleton(w io.Writer) error
 	RenderYourBranches(w io.Writer, branches []domain.BranchWithPipeline, gitlabUsername, githubUsername string) error
 }
 

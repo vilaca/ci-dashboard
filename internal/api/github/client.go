@@ -245,17 +245,42 @@ func (c *Client) GetBranches(ctx context.Context, projectID string, limit int) (
 	key := fmt.Sprintf("GetBranches:%s:%d", projectID, perPage)
 
 	result, err := c.doRequestWithDedup(ctx, key, func() (interface{}, error) {
-		// projectID format: "owner/repo"
+		// First, get repository info to find the default branch
+		repoURL := fmt.Sprintf("%s/repos/%s", c.baseURL, projectID)
+		var repo githubRepository
+		if err := c.doRequest(ctx, repoURL, &repo); err != nil {
+			log.Printf("[GitHub] Failed to get repo info for %s (URL: %s): %v", projectID, repoURL, err)
+			// Continue without default branch info
+		}
+		defaultBranch := repo.DefaultBranch
+
+		// Get branches
 		url := fmt.Sprintf("%s/repos/%s/branches?per_page=%d", c.baseURL, projectID, perPage)
 
 		var ghBranches []githubBranch
 		if err := c.doRequest(ctx, url, &ghBranches); err != nil {
-			return nil, fmt.Errorf("failed to get branches: %w", err)
+			return nil, fmt.Errorf("failed to get branches (URL: %s): %w", url, err)
 		}
 
 		branches := make([]domain.Branch, len(ghBranches))
 		for i, ghb := range ghBranches {
-			branches[i] = c.convertBranch(ghb, projectID)
+			isDefault := (defaultBranch != "" && ghb.Name == defaultBranch)
+
+			// Only fetch commit details for the default branch to improve performance
+			if isDefault {
+				commitURL := fmt.Sprintf("%s/repos/%s/commits/%s", c.baseURL, projectID, ghb.Commit.SHA)
+				var commitDetails githubCommit
+				if err := c.doRequest(ctx, commitURL, &commitDetails); err != nil {
+					log.Printf("[GitHub] Failed to get commit details for %s/%s (URL: %s): %v", projectID, ghb.Name, commitURL, err)
+					branches[i] = c.convertBranch(ghb, projectID, nil, isDefault)
+				} else {
+					log.Printf("[GitHub] Got commit details for %s/%s: author=%s, date=%s", projectID, ghb.Name, commitDetails.Commit.Author.Name, commitDetails.Commit.Author.Date)
+					branches[i] = c.convertBranch(ghb, projectID, &commitDetails, isDefault)
+				}
+			} else {
+				// Non-default branch - no commit details needed
+				branches[i] = c.convertBranch(ghb, projectID, nil, isDefault)
+			}
 		}
 
 		return branches, nil
@@ -399,10 +424,12 @@ func (c *Client) convertProjects(ghRepos []githubRepository) []domain.Project {
 	projects := make([]domain.Project, 0, len(ghRepos))
 	for _, repo := range ghRepos {
 		projects = append(projects, domain.Project{
-			ID:       repo.FullName,
-			Name:     repo.Name,
-			WebURL:   repo.HTMLURL,
-			Platform: "github",
+			ID:            repo.FullName,
+			Name:          repo.Name,
+			WebURL:        repo.HTMLURL,
+			Platform:      "github",
+			IsFork:        repo.Fork,
+			DefaultBranch: repo.DefaultBranch,
 		})
 	}
 	return projects
@@ -465,19 +492,29 @@ func convertStatus(status, conclusion string) domain.Status {
 }
 
 // convertBranch converts GitHub branch to domain model.
-func (c *Client) convertBranch(ghb githubBranch, projectID string) domain.Branch {
+func (c *Client) convertBranch(ghb githubBranch, projectID string, commit *githubCommit, isDefault bool) domain.Branch {
 	// Parse owner/repo to construct branch URL
 	webURL := fmt.Sprintf("https://github.com/%s/tree/%s", projectID, ghb.Name)
+
+	// Extract commit details if available
+	commitMsg := ""
+	commitDate := time.Time{}
+	commitAuthor := ""
+	if commit != nil {
+		commitMsg = commit.Commit.Message
+		commitDate = commit.Commit.Author.Date
+		commitAuthor = commit.Commit.Author.Name
+	}
 
 	return domain.Branch{
 		Name:           ghb.Name,
 		ProjectID:      projectID,
 		Repository:     projectID,
 		LastCommitSHA:  ghb.Commit.SHA,
-		LastCommitMsg:  "", // GitHub branches API doesn't include message
-		LastCommitDate: time.Time{}, // Not available in branches list
-		CommitAuthor:   "", // Not available in branches list
-		IsDefault:      false, // Need separate API call to determine
+		LastCommitMsg:  commitMsg,
+		LastCommitDate: commitDate,
+		CommitAuthor:   commitAuthor,
+		IsDefault:      isDefault,
 		IsProtected:    ghb.Protected,
 		WebURL:         webURL,
 		Platform:       "github",
@@ -486,10 +523,12 @@ func (c *Client) convertBranch(ghb githubBranch, projectID string) domain.Branch
 
 // GitHub API response types
 type githubRepository struct {
-	ID       int    `json:"id"`
-	Name     string `json:"name"`
-	FullName string `json:"full_name"`
-	HTMLURL  string `json:"html_url"`
+	ID            int    `json:"id"`
+	Name          string `json:"name"`
+	FullName      string `json:"full_name"`
+	HTMLURL       string `json:"html_url"`
+	DefaultBranch string `json:"default_branch"`
+	Fork          bool   `json:"fork"`
 }
 
 type githubWorkflowRunsResponse struct {
@@ -515,6 +554,18 @@ type githubBranch struct {
 	Commit    struct {
 		SHA string `json:"sha"`
 		URL string `json:"url"`
+	} `json:"commit"`
+}
+
+type githubCommit struct {
+	SHA    string `json:"sha"`
+	Commit struct {
+		Author struct {
+			Name  string    `json:"name"`
+			Email string    `json:"email"`
+			Date  time.Time `json:"date"`
+		} `json:"author"`
+		Message string `json:"message"`
 	} `json:"commit"`
 }
 
@@ -573,6 +624,35 @@ func (c *Client) GetIssues(ctx context.Context, projectID string) ([]domain.Issu
 		return nil, err
 	}
 	return result.([]domain.Issue), nil
+}
+
+// GetCurrentUser retrieves the authenticated user's profile.
+func (c *Client) GetCurrentUser(ctx context.Context) (*domain.UserProfile, error) {
+	key := "GetCurrentUser"
+
+	result, err := c.doRequestWithDedup(ctx, key, func() (interface{}, error) {
+		url := fmt.Sprintf("%s/user", c.baseURL)
+
+		var ghUser githubUser
+		if err := c.doRequest(ctx, url, &ghUser); err != nil {
+			return nil, fmt.Errorf("failed to get current user: %w", err)
+		}
+
+		profile := &domain.UserProfile{
+			Username:  ghUser.Login,
+			Name:      ghUser.Name,
+			AvatarURL: ghUser.AvatarURL,
+			WebURL:    ghUser.HTMLURL,
+			Platform:  "github",
+		}
+
+		return profile, nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+	return result.(*domain.UserProfile), nil
 }
 
 // convertPullRequest converts GitHub PR to domain MergeRequest.
@@ -671,8 +751,10 @@ type githubRef struct {
 
 // GitHub User type
 type githubUser struct {
-	Login string `json:"login"`
-	Name  string `json:"name"`
+	Login     string `json:"login"`
+	Name      string `json:"name"`
+	AvatarURL string `json:"avatar_url"`
+	HTMLURL   string `json:"html_url"`
 }
 
 // GitHub Label type

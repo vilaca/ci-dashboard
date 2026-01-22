@@ -26,23 +26,48 @@ func main() {
 
 	// Start server
 	addr := fmt.Sprintf(":%d", cfg.Port)
-	log.Printf("Starting CI Dashboard on http://localhost%s", addr)
+	log.Printf("=== CI Dashboard Configuration ===")
+	log.Printf("Server: http://localhost%s", addr)
+	log.Printf("Runs per repository: %d", cfg.RunsPerRepository)
+	log.Printf("Recent pipelines limit: %d", cfg.RecentPipelinesLimit)
 
 	if cfg.HasGitLabConfig() {
-		log.Printf("GitLab integration enabled (cache: %ds)", cfg.GitLabCacheDurationSeconds)
+		log.Printf("GitLab: ENABLED")
+		log.Printf("  URL: %s", cfg.GitLabURL)
+		log.Printf("  Cache TTL: %ds (30 min)", cfg.GitLabCacheDurationSeconds)
+		if cfg.GitLabCurrentUser != "" {
+			log.Printf("  Current user: %s", cfg.GitLabCurrentUser)
+		}
 		if len(cfg.GetGitLabWatchedRepos()) > 0 {
-			log.Printf("GitLab whitelist: %d repositories", len(cfg.GetGitLabWatchedRepos()))
+			log.Printf("  Watching: %d specific repositories", len(cfg.GetGitLabWatchedRepos()))
+		} else {
+			log.Printf("  Watching: all accessible repositories")
 		}
+	} else {
+		log.Printf("GitLab: DISABLED (set GITLAB_TOKEN to enable)")
 	}
+
 	if cfg.HasGitHubConfig() {
-		log.Printf("GitHub integration enabled (cache: %ds)", cfg.GitHubCacheDurationSeconds)
-		if len(cfg.GetGitHubWatchedRepos()) > 0 {
-			log.Printf("GitHub whitelist: %d repositories", len(cfg.GetGitHubWatchedRepos()))
+		log.Printf("GitHub: ENABLED")
+		log.Printf("  URL: %s", cfg.GitHubURL)
+		log.Printf("  Cache TTL: %ds (30 min)", cfg.GitHubCacheDurationSeconds)
+		if cfg.GitHubCurrentUser != "" {
+			log.Printf("  Current user: %s", cfg.GitHubCurrentUser)
 		}
+		if len(cfg.GetGitHubWatchedRepos()) > 0 {
+			log.Printf("  Watching: %d specific repositories", len(cfg.GetGitHubWatchedRepos()))
+		} else {
+			log.Printf("  Watching: all accessible repositories")
+		}
+	} else {
+		log.Printf("GitHub: DISABLED (set GITHUB_TOKEN to enable)")
 	}
+
 	if !cfg.HasGitLabConfig() && !cfg.HasGitHubConfig() {
-		log.Printf("WARNING: No CI platforms configured. Set GITLAB_TOKEN or GITHUB_TOKEN")
+		log.Printf("WARNING: No CI platforms configured!")
 	}
+	log.Printf("==================================")
+	log.Printf("Server starting...")
 
 	if err := http.ListenAndServe(addr, server); err != nil {
 		log.Fatalf("Server failed: %v", err)

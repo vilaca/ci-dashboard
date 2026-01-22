@@ -168,6 +168,39 @@ func commonCSS() string {
 			outline-offset: 2px;
 		}
 
+		/* Action Buttons */
+		.action-buttons {
+			margin-bottom: 20px;
+			display: flex;
+			gap: 10px;
+			flex-wrap: wrap;
+		}
+
+		.refresh-btn {
+			padding: 8px 16px;
+			background: var(--button-bg);
+			color: white;
+			border: none;
+			border-radius: 4px;
+			cursor: pointer;
+			font-size: 14px;
+			font-weight: 500;
+			transition: background-color 0.3s, transform 0.1s;
+		}
+
+		.refresh-btn:hover {
+			background: var(--button-hover);
+		}
+
+		.refresh-btn:active {
+			transform: scale(0.98);
+		}
+
+		.refresh-btn:focus {
+			outline: 2px solid var(--link-color);
+			outline-offset: 2px;
+		}
+
 		/* Status Badges */
 		.status-badge {
 			padding: 4px 10px;
@@ -698,6 +731,9 @@ func buildNavigation() string {
 			<a href="/your-branches">Your Branches</a>
 			<a href="/mrs">Open MRs/PRs</a>
 			<a href="/issues">Open Issues</a>
+		</div>
+		<div class="action-buttons">
+			<button class="refresh-btn" onclick="location.reload()" aria-label="Refresh page">🔄 Refresh</button>
 			<button class="theme-toggle" onclick="toggleTheme()" aria-label="Toggle theme">🌙 Dark Mode</button>
 		</div>`
 }

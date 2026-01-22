@@ -46,6 +46,126 @@ func (s *PipelineService) getClientForPlatform(platform string) api.Client {
 	return s.clients[platform]
 }
 
+// GetPipelinesForProject retrieves pipelines for a single project.
+func (s *PipelineService) GetPipelinesForProject(ctx context.Context, projectID string, limit int) ([]domain.Pipeline, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	// Try to find which platform this project belongs to
+	projects, err := s.GetAllProjects(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var platform string
+	for _, p := range projects {
+		if p.ID == projectID {
+			platform = p.Platform
+			break
+		}
+	}
+
+	if platform == "" {
+		return nil, fmt.Errorf("project not found: %s", projectID)
+	}
+
+	client := s.getClientForPlatform(platform)
+	if client == nil {
+		return nil, fmt.Errorf("no client for platform: %s", platform)
+	}
+
+	pipelines, err := client.GetPipelines(ctx, projectID, limit)
+	if err != nil {
+		return nil, err
+	}
+
+	return pipelines, nil
+}
+
+// GetBranchesForProject retrieves branches with pipelines for a single project.
+func (s *PipelineService) GetBranchesForProject(ctx context.Context, project domain.Project, limit int) ([]domain.BranchWithPipeline, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	client := s.getClientForPlatform(project.Platform)
+	if client == nil {
+		return nil, fmt.Errorf("no client for platform: %s", project.Platform)
+	}
+
+	// Get branches
+	branches, err := client.GetBranches(ctx, project.ID, limit)
+	if err != nil {
+		return nil, err
+	}
+
+	// Fill in repository name
+	for i := range branches {
+		if branches[i].Repository == project.ID {
+			branches[i].Repository = project.Name
+		}
+	}
+
+	// Get pipeline for each branch
+	var results []domain.BranchWithPipeline
+	for _, branch := range branches {
+		var pipeline *domain.Pipeline
+		p, err := client.GetLatestPipeline(ctx, branch.ProjectID, branch.Name)
+		if err == nil && p != nil {
+			pipeline = p
+		}
+
+		results = append(results, domain.BranchWithPipeline{
+			Branch:   branch,
+			Pipeline: pipeline,
+		})
+	}
+
+	return results, nil
+}
+
+// GetDefaultBranchForProject retrieves only the default branch with its pipeline for a project.
+// This is optimized for cases where you only need the default branch (e.g., repository listing).
+// Returns: defaultBranch, defaultPipeline, totalBranchCount, error
+func (s *PipelineService) GetDefaultBranchForProject(ctx context.Context, project domain.Project) (*domain.Branch, *domain.Pipeline, int, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	client := s.getClientForPlatform(project.Platform)
+	if client == nil {
+		return nil, nil, 0, fmt.Errorf("no client for platform: %s", project.Platform)
+	}
+
+	// Get branches (just metadata, not pipelines yet)
+	branches, err := client.GetBranches(ctx, project.ID, 50)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+
+	// Find default branch
+	var defaultBranch *domain.Branch
+	for i := range branches {
+		if branches[i].IsDefault {
+			// Fix repository name
+			if branches[i].Repository == project.ID {
+				branches[i].Repository = project.Name
+			}
+			defaultBranch = &branches[i]
+			break
+		}
+	}
+
+	// Get pipeline only for default branch
+	var defaultPipeline *domain.Pipeline
+	if defaultBranch != nil {
+		p, err := client.GetLatestPipeline(ctx, defaultBranch.ProjectID, defaultBranch.Name)
+		if err == nil && p != nil {
+			defaultPipeline = p
+		}
+	}
+
+	return defaultBranch, defaultPipeline, len(branches), nil
+}
+
 // isWhitelisted checks if a project is in the appropriate whitelist.
 // Returns true if whitelist is empty (allow all) or if project is in whitelist.
 func (s *PipelineService) isWhitelisted(project domain.Project) bool {
@@ -458,6 +578,77 @@ func (s *PipelineService) GetAllMergeRequests(ctx context.Context) ([]domain.Mer
 	}
 
 	return allMRs, nil
+}
+
+// GetMergeRequestsForProject retrieves open merge requests/pull requests for a single project.
+func (s *PipelineService) GetMergeRequestsForProject(ctx context.Context, project domain.Project) ([]domain.MergeRequest, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	// Get the appropriate client for this project's platform
+	c := s.getClientForPlatform(project.Platform)
+	if c == nil {
+		return nil, fmt.Errorf("no client for platform: %s", project.Platform)
+	}
+
+	// Check if client supports ExtendedClient interface
+	client, ok := c.(api.ExtendedClient)
+	if !ok {
+		return []domain.MergeRequest{}, nil // Platform doesn't support MRs, return empty list
+	}
+
+	mrs, err := client.GetMergeRequests(ctx, project.ID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get MRs for %s: %w", project.Name, err)
+	}
+
+	// Set repository name from project
+	for i := range mrs {
+		if mrs[i].Repository == "" || mrs[i].Repository == mrs[i].Title {
+			mrs[i].Repository = project.Name
+		}
+	}
+
+	return mrs, nil
+}
+
+// GetUserProfiles retrieves user profiles from all configured platforms.
+func (s *PipelineService) GetUserProfiles(ctx context.Context) ([]domain.UserProfile, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var profiles []domain.UserProfile
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	// Fetch user profiles from all platforms concurrently
+	for platform, c := range s.clients {
+		// Check if client supports UserClient interface
+		userClient, ok := c.(api.UserClient)
+		if !ok {
+			continue // Skip clients that don't support user profiles
+		}
+
+		wg.Add(1)
+		go func(p string, client api.UserClient) {
+			defer wg.Done()
+
+			profile, err := client.GetCurrentUser(ctx)
+			if err != nil {
+				// Log error but don't fail the whole operation
+				fmt.Printf("Failed to get user profile for %s: %v\n", p, err)
+				return
+			}
+
+			mu.Lock()
+			profiles = append(profiles, *profile)
+			mu.Unlock()
+		}(platform, userClient)
+	}
+
+	wg.Wait()
+
+	return profiles, nil
 }
 
 // GetAllIssues retrieves all open issues across all projects.

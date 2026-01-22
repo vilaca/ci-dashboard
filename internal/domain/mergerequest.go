@@ -9,6 +9,7 @@ type MergeRequest struct {
 	Title       string
 	Description string
 	State       string // "opened", "closed", "merged"
+	IsDraft     bool   // true if MR/PR is marked as draft/WIP
 	SourceBranch string
 	TargetBranch string
 	Author      string

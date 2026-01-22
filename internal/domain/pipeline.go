@@ -51,8 +51,10 @@ func (s Status) IsTerminal() bool {
 
 // Project represents a code repository project.
 type Project struct {
-	ID       string
-	Name     string
-	WebURL   string
-	Platform string // "gitlab" or "github"
+	ID            string
+	Name          string
+	WebURL        string
+	Platform      string // CI/CD platform identifier (e.g., "gitlab", "github")
+	IsFork        bool   // true if this is a forked repository
+	DefaultBranch string // name of the default branch (e.g., "main", "master")
 }

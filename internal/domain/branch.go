@@ -15,7 +15,7 @@ type Branch struct {
 	IsDefault      bool   // Is this the default branch (main/master)?
 	IsProtected    bool   // Is this branch protected?
 	WebURL         string // Link to branch in GitLab/GitHub
-	Platform       string // "gitlab" or "github"
+	Platform       string // CI/CD platform identifier (e.g., "gitlab", "github")
 }
 
 // BranchWithPipeline combines a branch with its latest pipeline status.

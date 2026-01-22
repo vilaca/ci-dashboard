@@ -47,6 +47,15 @@ type ExtendedClient interface {
 	GetIssues(ctx context.Context, projectID string) ([]domain.Issue, error)
 }
 
+// UserClient extends Client with user profile operations.
+// Follows Interface Segregation Principle.
+type UserClient interface {
+	Client
+
+	// GetCurrentUser returns the profile of the authenticated user.
+	GetCurrentUser(ctx context.Context) (*domain.UserProfile, error)
+}
+
 // ClientConfig holds common configuration for API clients.
 type ClientConfig struct {
 	BaseURL string

@@ -17,16 +17,19 @@ import (
 type CachingClient struct {
 	client        Client
 	extendedClient ExtendedClient // May be nil if underlying client doesn't implement ExtendedClient
+	userClient    UserClient     // May be nil if underlying client doesn't implement UserClient
 	cache         *cache
 }
 
 // NewCachingClient creates a new caching client wrapper.
 func NewCachingClient(client Client, cacheDuration time.Duration) *CachingClient {
 	extendedClient, _ := client.(ExtendedClient)
+	userClient, _ := client.(UserClient)
 
 	return &CachingClient{
 		client:         client,
 		extendedClient: extendedClient,
+		userClient:     userClient,
 		cache:          newCache(cacheDuration),
 	}
 }
@@ -187,6 +190,35 @@ func (c *CachingClient) GetIssues(ctx context.Context, projectID string) ([]doma
 	c.cache.set(key, issues)
 
 	return issues, nil
+}
+
+// GetCurrentUser retrieves the current user profile with caching (UserClient).
+func (c *CachingClient) GetCurrentUser(ctx context.Context) (*domain.UserProfile, error) {
+	if c.userClient == nil {
+		return nil, fmt.Errorf("underlying client does not support GetCurrentUser")
+	}
+
+	key := "GetCurrentUser"
+
+	// Try cache first
+	if cached, found := c.cache.get(key); found {
+		if profile, ok := cached.(*domain.UserProfile); ok {
+			log.Printf("[Cache] %s - HIT", key)
+			return profile, nil
+		}
+	}
+
+	// Cache miss - fetch from underlying client
+	log.Printf("[Cache] %s - MISS", key)
+	profile, err := c.userClient.GetCurrentUser(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Store in cache
+	c.cache.set(key, profile)
+
+	return profile, nil
 }
 
 // cache implements a thread-safe TTL cache.

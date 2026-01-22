@@ -2,6 +2,8 @@ package dashboard
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 
@@ -36,9 +38,13 @@ type PipelineService interface {
 	GetRepositoriesWithRecentRuns(ctx context.Context, runsPerRepo int) ([]RepositoryWithRuns, error)
 	GetRecentPipelines(ctx context.Context, totalLimit int) ([]domain.Pipeline, error)
 	GetAllMergeRequests(ctx context.Context) ([]domain.MergeRequest, error)
+	GetMergeRequestsForProject(ctx context.Context, project domain.Project) ([]domain.MergeRequest, error)
 	GetAllIssues(ctx context.Context) ([]domain.Issue, error)
 	GetBranchesWithPipelines(ctx context.Context, limit int) ([]domain.BranchWithPipeline, error)
+	GetBranchesForProject(ctx context.Context, project domain.Project, limit int) ([]domain.BranchWithPipeline, error)
+	GetDefaultBranchForProject(ctx context.Context, project domain.Project) (*domain.Branch, *domain.Pipeline, int, error)
 	FilterBranchesByAuthor(branches []domain.BranchWithPipeline, gitlabUsername, githubUsername string) []domain.BranchWithPipeline
+	GetUserProfiles(ctx context.Context) ([]domain.UserProfile, error)
 }
 
 // RepositoryWithRuns is imported from service package
@@ -63,6 +69,7 @@ func NewHandler(renderer Renderer, logger Logger, pipelineService PipelineServic
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/", h.handleRepositories)
 	mux.HandleFunc("/api/health", h.handleHealth)
+	mux.HandleFunc("/api/stream/repositories", h.handleStreamRepositories)
 	mux.HandleFunc("/repository", h.handleRepositoryDetail)
 	mux.HandleFunc("/pipelines", h.handleRecentPipelines)
 	mux.HandleFunc("/pipelines/failed", h.handleFailedPipelines)
@@ -188,22 +195,195 @@ func (h *Handler) handleWorkflowRuns(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleRepositories serves the repositories page with recent runs.
+// handleRepositories serves the repositories page with progressive loading.
 func (h *Handler) handleRepositories(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html")
 
-	repositories, err := h.pipelineService.GetRepositoriesWithRecentRuns(r.Context(), h.runsPerRepo)
+	// Fetch user profiles from all platforms
+	userProfiles, err := h.pipelineService.GetUserProfiles(r.Context())
 	if err != nil {
-		h.logger.Printf("failed to get repositories: %v", err)
+		h.logger.Printf("failed to get user profiles: %v", err)
+		// Continue without user profiles
+		userProfiles = []domain.UserProfile{}
+	}
+
+	// Render empty page skeleton immediately with user profiles
+	if err := h.renderer.RenderRepositoriesSkeleton(w, userProfiles); err != nil {
+		h.logger.Printf("failed to render repositories skeleton: %v", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+}
+
+// RepositoryDefaultBranch holds repository info with default branch details.
+type RepositoryDefaultBranch struct {
+	Project       domain.Project         `json:"Project"`
+	DefaultBranch *domain.Branch         `json:"DefaultBranch"`
+	Pipeline      *domain.Pipeline       `json:"Pipeline"`
+	BranchCount   int                    `json:"BranchCount"`
+	OpenMRCount   int                    `json:"OpenMRCount"`
+	DraftMRCount  int                    `json:"DraftMRCount"`
+}
+
+// handleStreamRepositories streams repository data via Server-Sent Events.
+func (h *Handler) handleStreamRepositories(w http.ResponseWriter, r *http.Request) {
+	// Set headers for SSE
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
 		return
 	}
 
-	if err := h.renderer.RenderRepositories(w, repositories); err != nil {
-		h.logger.Printf("failed to render repositories: %v", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+	// Get all projects (already fetches from platforms in parallel)
+	projects, err := h.pipelineService.GetAllProjects(r.Context())
+	if err != nil {
+		h.logger.Printf("failed to get projects: %v", err)
+		fmt.Fprintf(w, "event: error\ndata: %s\n\n", err.Error())
+		flusher.Flush()
 		return
 	}
+
+	h.logger.Printf("streaming %d projects", len(projects))
+
+	// Send total count
+	fmt.Fprintf(w, "event: total\ndata: %d\n\n", len(projects))
+	flusher.Flush()
+
+	// Group projects by platform
+	gitlabProjects := []domain.Project{}
+	githubProjects := []domain.Project{}
+	for _, proj := range projects {
+		if proj.Platform == "gitlab" {
+			gitlabProjects = append(gitlabProjects, proj)
+		} else if proj.Platform == "github" {
+			githubProjects = append(githubProjects, proj)
+		}
+	}
+
+	// Channel to collect repository data from both platforms
+	type repoResult struct {
+		data RepositoryDefaultBranch
+		err  error
+	}
+	resultChan := make(chan repoResult, len(projects))
+
+	// Process GitLab repositories in parallel
+	go func() {
+		for _, proj := range gitlabProjects {
+			select {
+			case <-r.Context().Done():
+				return
+			default:
+			}
+
+			// Get only default branch and its pipeline (optimized to reduce cache misses)
+			defaultBranch, defaultPipeline, branchCount, err := h.pipelineService.GetDefaultBranchForProject(r.Context(), proj)
+			if err != nil {
+				h.logger.Printf("failed to get default branch for %s: %v", proj.Name, err)
+			}
+
+			// Get MRs for this project
+			openMRCount := 0
+			draftMRCount := 0
+			mrs, err := h.pipelineService.GetMergeRequestsForProject(r.Context(), proj)
+			if err != nil {
+				h.logger.Printf("failed to get MRs for %s: %v", proj.Name, err)
+			} else {
+				for _, mr := range mrs {
+					if mr.State == "opened" || mr.State == "open" {
+						openMRCount++
+						if mr.IsDraft {
+							draftMRCount++
+						}
+					}
+				}
+			}
+
+			repoData := RepositoryDefaultBranch{
+				Project:       proj,
+				DefaultBranch: defaultBranch,
+				Pipeline:      defaultPipeline,
+				BranchCount:   branchCount,
+				OpenMRCount:   openMRCount,
+				DraftMRCount:  draftMRCount,
+			}
+
+			resultChan <- repoResult{data: repoData, err: nil}
+		}
+	}()
+
+	// Process GitHub repositories in parallel
+	go func() {
+		for _, proj := range githubProjects {
+			select {
+			case <-r.Context().Done():
+				return
+			default:
+			}
+
+			// Get only default branch and its pipeline (optimized to reduce cache misses)
+			defaultBranch, defaultPipeline, branchCount, err := h.pipelineService.GetDefaultBranchForProject(r.Context(), proj)
+			if err != nil {
+				h.logger.Printf("failed to get default branch for %s: %v", proj.Name, err)
+			}
+
+			// Get MRs for this project
+			openMRCount := 0
+			draftMRCount := 0
+			mrs, err := h.pipelineService.GetMergeRequestsForProject(r.Context(), proj)
+			if err != nil {
+				h.logger.Printf("failed to get MRs for %s: %v", proj.Name, err)
+			} else {
+				for _, mr := range mrs {
+					if mr.State == "opened" || mr.State == "open" {
+						openMRCount++
+						if mr.IsDraft {
+							draftMRCount++
+						}
+					}
+				}
+			}
+
+			repoData := RepositoryDefaultBranch{
+				Project:       proj,
+				DefaultBranch: defaultBranch,
+				Pipeline:      defaultPipeline,
+				BranchCount:   branchCount,
+				OpenMRCount:   openMRCount,
+				DraftMRCount:  draftMRCount,
+			}
+
+			resultChan <- repoResult{data: repoData, err: nil}
+		}
+	}()
+
+	// Stream results as they arrive from either platform
+	streamed := 0
+	for streamed < len(projects) {
+		select {
+		case <-r.Context().Done():
+			return
+		case result := <-resultChan:
+			// Send as JSON
+			data, err := json.Marshal(result.data)
+			if err != nil {
+				h.logger.Printf("failed to marshal repository: %v", err)
+				continue
+			}
+
+			fmt.Fprintf(w, "event: repository\ndata: %s\n\n", string(data))
+			flusher.Flush()
+			streamed++
+		}
+	}
+
+	// Signal completion
+	fmt.Fprintf(w, "event: done\ndata: complete\n\n")
+	flusher.Flush()
 }
 
 // handleRepositoryDetail serves the repository detail page.
