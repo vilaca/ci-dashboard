@@ -7,13 +7,18 @@ A dashboard for monitoring CI/CD pipelines from GitLab and GitHub in one unified
 - 🔄 **Multi-Platform Support**: Monitor both GitLab and GitHub Actions pipelines
 - 📊 **Real-time Status**: View latest pipeline statuses at a glance
 - 🎨 **Clean UI**: Simple, intuitive web interface with dark mode toggle
+- 👤 **User Profiles**: Display authenticated user avatars in navigation (GitLab & GitHub)
 - 🔌 **REST API**: JSON API for integration with other tools
-- ⚡ **Fast**: Concurrent API calls for quick data retrieval
+- ⚡ **Fast**: Concurrent API calls with progressive loading and caching
+- 📈 **Smart Sorting**: Repositories sorted by recent activity (commits, MRs, pushes)
+- 🔢 **Progress Tracking**: Real-time loading counter with total repository count
 - 🔒 **Repository Whitelisting**: Restrict access to specific repositories for security
 - ⚙️ **Flexible Configuration**: YAML file or environment variables (env vars take priority)
 - 🎯 **GitHub Workflows**: Each GitHub Actions workflow displayed as a separate pipeline
 - ⏱️ **Duration Tracking**: View pipeline execution time at a glance
-- 📈 **Smart Sorting**: Repositories sorted by latest run time
+- 🔀 **Merge Requests/PRs**: View and filter open MRs/PRs with draft detection
+- 🐛 **Issues**: Browse open issues across all repositories
+- 🌿 **Branch Management**: View all branches with pipeline status and metadata
 
 ## Quick Start
 
@@ -143,6 +148,7 @@ port: 8080
 gitlab:
   url: https://gitlab.com
   token: your-gitlab-token
+  user: your-gitlab-username        # Optional: For "Your Branches" view filtering
   watched_repos:
     - "123"      # GitLab project IDs
     - "456"
@@ -151,6 +157,7 @@ gitlab:
 github:
   url: https://api.github.com
   token: your-github-token
+  user: your-github-username        # Optional: For "Your Branches" view filtering
   watched_repos:
     - "owner/repo1"    # GitHub owner/repo format
     - "owner/repo2"
@@ -175,12 +182,14 @@ export CONFIG_FILE="/path/to/config.yaml" # Optional: Custom config file
 # GitLab Configuration (optional)
 export GITLAB_URL="https://gitlab.com"           # Default: https://gitlab.com
 export GITLAB_TOKEN="your-gitlab-token"
+export GITLAB_USER="your-gitlab-username"        # Optional: For "Your Branches" filtering
 export GITLAB_WATCHED_REPOS="123,456"            # Comma-separated project IDs
 export GITLAB_CACHE_DURATION_SECONDS=300         # Default: 300 (5 minutes)
 
 # GitHub Configuration (optional)
 export GITHUB_URL="https://api.github.com"       # Default: https://api.github.com
 export GITHUB_TOKEN="your-github-token"
+export GITHUB_USER="your-github-username"        # Optional: For "Your Branches" filtering
 export GITHUB_WATCHED_REPOS="owner/repo1,owner/repo2"  # Comma-separated repos
 export GITHUB_CACHE_DURATION_SECONDS=300         # Default: 300 (5 minutes)
 
@@ -231,6 +240,26 @@ github:
 github:
   cache_duration_seconds: 0    # No caching
 ```
+
+#### User Avatars
+
+The dashboard displays authenticated user avatars in the navigation bar for both GitLab and GitHub accounts.
+
+**Avatar Sources:**
+- **GitHub**: Uses GitHub's CDN avatar URLs (publicly accessible)
+- **GitLab**:
+  - Uses Gravatar fallback for uploaded avatars (requires user email from API)
+  - GitLab uploaded avatars (`/uploads/` paths) require web session authentication
+  - Automatically falls back to Gravatar using user's email address
+
+**Caching:**
+- Avatars are cached in memory on first load
+- Cached avatars are served from local endpoint: `/api/avatar/{platform}/{username}`
+- Improves performance and reduces external API calls
+
+**Requirements:**
+- Valid API tokens with user profile access (automatically included in `read_api` for GitLab and `read:user` for GitHub)
+- No additional configuration needed - avatars load automatically
 
 #### Repository Whitelisting (Security Feature)
 
@@ -354,16 +383,44 @@ make test
 Once running, access the dashboard at:
 
 - **Home (Repositories View)**: http://localhost:8080/
-  - Repository cards sorted by latest activity
-  - Last N runs per repository (configurable via `RUNS_PER_REPOSITORY`)
-  - Each run shows: workflow name, time, duration, and status
+  - Progressive loading with total count (e.g., "Loading repositories: 234/500...")
+  - Repository table sorted by recent activity (most active first)
+  - Shows: pipeline status, branches, open MRs/PRs (with draft count), last commit info
+  - Star/favorite repositories for quick access
+  - User avatars in navigation (GitLab & GitHub profiles)
 
-- **Recent Pipelines View**: http://localhost:8080/pipelines
+- **Repository Detail**: http://localhost:8080/repository?id=owner/repo
+  - Detailed statistics: success rate, total runs, average duration
+  - Complete run history for the repository
+  - Branch and commit information
+
+- **Recent Pipelines**: http://localhost:8080/pipelines
   - Table of most recent pipelines across all repositories
   - Sorted by update time (most recent first)
   - Limit configurable via `RECENT_PIPELINES_LIMIT`
 
-- **Grouped Pipelines View**: http://localhost:8080/pipelines/grouped
+- **Merge Requests/Pull Requests**: http://localhost:8080/merge-requests
+  - View all open MRs/PRs across repositories
+  - Draft detection (shows "5 (2 draft)" when applicable)
+  - Filter by repository, author, or state
+  - Direct links to GitLab/GitHub
+
+- **Issues**: http://localhost:8080/issues
+  - Browse open issues across all repositories
+  - Filter by repository, author, or labels
+  - Quick access to issue details
+
+- **Branches**: http://localhost:8080/branches
+  - View all branches with metadata (last commit, protection status, default branch)
+  - Shows latest pipeline status for each branch
+  - Filter by repository, branch name, or pipeline status
+
+- **Your Branches**: http://localhost:8080/your-branches
+  - Same as Branches but filtered by your commits
+  - Requires `GITLAB_USER` and/or `GITHUB_USER` environment variables
+  - Shows only branches where you're the last committer
+
+- **Grouped Pipelines**: http://localhost:8080/pipelines/grouped
   - Pipelines grouped by workflow name (GitHub) or repository (GitLab)
 
 - **Workflow Runs**: http://localhost:8080/pipelines/workflow?project=owner/repo&workflow=123
@@ -374,24 +431,35 @@ Once running, access the dashboard at:
 
 The dashboard features:
 - 🌓 **Dark mode toggle** in the top-right corner
+- 👤 **User profile avatars** with Gravatar fallback for GitLab
 - 🔄 **Auto-refresh** capability
+- ⭐ **Favorite repositories** for quick access
 - 📊 **Duration tracking** for all pipeline runs
 - 🔗 **Direct links** to view full details on GitLab/GitHub
+- 🔢 **Real-time progress** during repository loading
+- 🎯 **Smart filtering** across all views
 
 ## API Endpoints
 
 ### Web Interface
-- `GET /` - Repositories view (cards with recent runs, sorted by latest activity)
+- `GET /` - Repositories view (table with progressive loading, sorted by recent activity)
 - `GET /repository` - Repository detail page (requires `?id=owner/repo` or `?id=123` query param)
   - Shows repository statistics (success rate, total runs, average duration)
   - Lists all recent runs for the repository
 - `GET /pipelines` - Recent pipelines view (table of most recent pipelines)
 - `GET /pipelines/grouped` - Grouped pipelines view (organized by workflow/repository)
 - `GET /pipelines/workflow` - Workflow-specific runs (requires `?project=owner/repo&workflow=123` query params)
+- `GET /merge-requests` - Open merge requests/pull requests across all repositories
+- `GET /issues` - Open issues across all repositories
+- `GET /branches` - All branches with pipeline status and metadata
+- `GET /your-branches` - Branches filtered by your commits (requires `GITLAB_USER`/`GITHUB_USER`)
 
 ### REST API
 - `GET /api/health` - Health check endpoint (returns `{"status":"ok"}`)
 - `GET /api/pipelines` - Pipelines data (JSON format)
+- `GET /api/stream/repositories` - Server-Sent Events stream for progressive repository loading
+- `GET /api/repository-detail` - Repository detail data (requires `?id=` query param)
+- `GET /api/avatar/{platform}/{username}` - User avatar image (cached)
 
 ### API Response Example
 
