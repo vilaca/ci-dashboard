@@ -13,6 +13,13 @@ type Client interface {
 	// GetProjects returns all projects accessible by the configured credentials.
 	GetProjects(ctx context.Context) ([]domain.Project, error)
 
+	// GetProjectsPage returns a single page of projects.
+	// Returns: projects for this page, whether there's a next page, and error.
+	GetProjectsPage(ctx context.Context, page int) ([]domain.Project, bool, error)
+
+	// GetProjectCount returns the total number of projects accessible by the configured credentials.
+	GetProjectCount(ctx context.Context) (int, error)
+
 	// GetLatestPipeline returns the most recent pipeline for a given project and branch.
 	GetLatestPipeline(ctx context.Context, projectID, branch string) (*domain.Pipeline, error)
 

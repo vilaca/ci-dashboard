@@ -140,20 +140,147 @@ func (c *Client) GetProjects(ctx context.Context) ([]domain.Project, error) {
 	key := "GetProjects"
 
 	result, err := c.doRequestWithDedup(ctx, key, func() (interface{}, error) {
-		url := fmt.Sprintf("%s/user/repos?per_page=100", c.baseURL)
+		var allProjects []domain.Project
+		page := 1
 
-		var ghRepos []githubRepository
-		if err := c.doRequest(ctx, url, &ghRepos); err != nil {
-			return nil, fmt.Errorf("failed to get repositories: %w", err)
+		for {
+			pageProjects, hasNext, err := c.GetProjectsPage(ctx, page)
+			if err != nil {
+				return nil, err
+			}
+
+			allProjects = append(allProjects, pageProjects...)
+
+			if !hasNext {
+				break
+			}
+
+			page++
 		}
 
-		return c.convertProjects(ghRepos), nil
+		log.Printf("[GitHub] GetProjects - completed, fetched %d total repositories", len(allProjects))
+
+		return allProjects, nil
 	})
 
 	if err != nil {
 		return nil, err
 	}
 	return result.([]domain.Project), nil
+}
+
+// GetProjectsPage fetches a single page of projects.
+// GetProjectCount returns the total number of repositories for the authenticated user.
+func (c *Client) GetProjectCount(ctx context.Context) (int, error) {
+	// Use search API to get total count
+	// Search for all repos owned by the authenticated user
+	url := fmt.Sprintf("%s/user/repos?per_page=1&page=1", c.baseURL)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return 0, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.token))
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	c.logRateLimitStatus(resp.Header)
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return 0, fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	// GitHub doesn't provide total count in headers for /user/repos
+	// We need to parse Link header to get last page number
+	linkHeader := resp.Header.Get("Link")
+
+	// Parse Link header to find last page
+	// Example: <https://api.github.com/user/repos?per_page=100&page=2>; rel="next", <https://api.github.com/user/repos?per_page=100&page=3>; rel="last"
+	lastPage := 1
+	if linkHeader != "" {
+		links := strings.Split(linkHeader, ",")
+		for _, link := range links {
+			if strings.Contains(link, `rel="last"`) {
+				// Extract page number from URL
+				if start := strings.Index(link, "page="); start != -1 {
+					start += 5
+					end := start
+					for end < len(link) && link[end] >= '0' && link[end] <= '9' {
+						end++
+					}
+					if end > start {
+						fmt.Sscanf(link[start:end], "%d", &lastPage)
+					}
+				}
+			}
+		}
+	}
+
+	// Estimate total count: lastPage * per_page (100)
+	// This is an estimate, last page might have fewer items
+	estimatedTotal := lastPage * 100
+
+	log.Printf("[GitHub] GetProjectCount: ~%d (estimated from %d pages)", estimatedTotal, lastPage)
+	return estimatedTotal, nil
+}
+
+func (c *Client) GetProjectsPage(ctx context.Context, page int) ([]domain.Project, bool, error) {
+	// Sort by last push time - most recently updated first
+	url := fmt.Sprintf("%s/user/repos?per_page=100&page=%d&sort=pushed&direction=desc", c.baseURL, page)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.token))
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, false, fmt.Errorf("request failed: %w", err)
+	}
+
+	c.logRateLimitStatus(resp.Header)
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, false, fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	// Decode this page's repositories
+	var ghRepos []githubRepository
+	if err := json.NewDecoder(resp.Body).Decode(&ghRepos); err != nil {
+		resp.Body.Close()
+		return nil, false, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	// Get Link header for pagination
+	linkHeader := resp.Header.Get("Link")
+	hasNextPage := strings.Contains(linkHeader, `rel="next"`)
+	resp.Body.Close()
+
+	// Convert projects from this page
+	pageProjects := c.convertProjects(ghRepos)
+
+	log.Printf("[GitHub] GetProjectsPage %d (fetched %d repositories, has next: %v)", page, len(ghRepos), hasNextPage)
+
+	// Check if there are more pages
+	if len(ghRepos) == 0 {
+		hasNextPage = false
+	}
+
+	return pageProjects, hasNextPage, nil
 }
 
 // GetLatestPipeline retrieves the most recent workflow run for a repository and branch.
@@ -669,6 +796,7 @@ func (c *Client) convertPullRequest(pr githubPullRequest, projectID string) doma
 		Title:        pr.Title,
 		Description:  pr.Body,
 		State:        pr.State,
+		IsDraft:      pr.Draft,
 		SourceBranch: pr.Head.Ref,
 		TargetBranch: pr.Base.Ref,
 		Author:       pr.User.Login,
@@ -717,16 +845,17 @@ func (c *Client) convertIssue(ghIssue githubIssue, projectID string) domain.Issu
 
 // GitHub PullRequest type
 type githubPullRequest struct {
-	Number    int       `json:"number"`
-	Title     string    `json:"title"`
-	Body      string    `json:"body"`
-	State     string    `json:"state"`
-	Head      githubRef `json:"head"`
-	Base      githubRef `json:"base"`
+	Number    int        `json:"number"`
+	Title     string     `json:"title"`
+	Body      string     `json:"body"`
+	State     string     `json:"state"`
+	Draft     bool       `json:"draft"` // true if PR is in draft mode
+	Head      githubRef  `json:"head"`
+	Base      githubRef  `json:"base"`
 	User      githubUser `json:"user"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	HTMLURL   string    `json:"html_url"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
+	HTMLURL   string     `json:"html_url"`
 }
 
 // GitHub Issue type

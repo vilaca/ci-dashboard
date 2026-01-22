@@ -197,6 +197,70 @@ func (s *PipelineService) isWhitelisted(project domain.Project) bool {
 	return false
 }
 
+// GetTotalProjectCount retrieves the total count of projects from all configured platforms.
+func (s *PipelineService) GetTotalProjectCount(ctx context.Context) (int, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	totalCount := 0
+
+	// Get count from GitLab
+	if gitlabClient := s.getClientForPlatform("gitlab"); gitlabClient != nil {
+		count, err := gitlabClient.GetProjectCount(ctx)
+		if err != nil {
+			return 0, fmt.Errorf("gitlab: %w", err)
+		}
+		totalCount += count
+	}
+
+	// Get count from GitHub
+	if githubClient := s.getClientForPlatform("github"); githubClient != nil {
+		count, err := githubClient.GetProjectCount(ctx)
+		if err != nil {
+			return 0, fmt.Errorf("github: %w", err)
+		}
+		totalCount += count
+	}
+
+	return totalCount, nil
+}
+
+// GetProjectsPageByPlatform retrieves a single page of projects from a specific platform.
+func (s *PipelineService) GetProjectsPageByPlatform(ctx context.Context, platform string, page int) ([]domain.Project, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	client := s.getClientForPlatform(platform)
+	if client == nil {
+		return nil, false, fmt.Errorf("no client for platform: %s", platform)
+	}
+
+	projects, hasNext, err := client.GetProjectsPage(ctx, page)
+	if err != nil {
+		return nil, false, fmt.Errorf("%s: %w", platform, err)
+	}
+
+	// Filter projects based on whitelist
+	var whitelist []string
+	if platform == "gitlab" {
+		whitelist = s.gitlabWhitelist
+	} else if platform == "github" {
+		whitelist = s.githubWhitelist
+	}
+
+	if len(whitelist) > 0 {
+		filtered := make([]domain.Project, 0)
+		for _, project := range projects {
+			if s.isWhitelisted(project) {
+				filtered = append(filtered, project)
+			}
+		}
+		projects = filtered
+	}
+
+	return projects, hasNext, nil
+}
+
 // GetAllProjects retrieves projects from all configured platforms.
 func (s *PipelineService) GetAllProjects(ctx context.Context) ([]domain.Project, error) {
 	s.mu.RLock()

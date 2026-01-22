@@ -16,32 +16,11 @@ func (r *HTMLRenderer) RenderRepositoriesSkeleton(w io.Writer, userProfiles []do
 	sb.WriteString(`<body>
 	<div class="container">
 `)
-	sb.WriteString(buildNavigation())
+	sb.WriteString(buildNavigationWithProfiles(userProfiles))
 	sb.WriteString(`
 		<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
 			<h1 style="margin: 0;">Repositories</h1>
-			<div style="display: flex; align-items: center; gap: 20px;">
-`)
-
-	// Add user profile images
-	if len(userProfiles) > 0 {
-		sb.WriteString(`				<div class="user-profiles">`)
-		for _, profile := range userProfiles {
-			sb.WriteString(`
-					<div class="user-profile">
-						<a href="` + escapeHTML(profile.WebURL) + `" target="_blank" rel="noopener noreferrer" title="` + escapeHTML(profile.Name) + ` (` + escapeHTML(profile.Username) + `)">
-							<img src="` + escapeHTML(profile.AvatarURL) + `" alt="` + escapeHTML(profile.Username) + `" class="profile-avatar">
-						</a>
-						<div class="profile-username">` + escapeHTML(profile.Username) + `</div>
-					</div>`)
-		}
-		sb.WriteString(`
-				</div>`)
-	}
-
-	sb.WriteString(`
-				<div id="progress-info" class="progress-info">Loading...</div>
-			</div>
+			<div id="progress-info" class="progress-info">Loading...</div>
 		</div>
 
 		<div class="filters" style="margin-bottom: 20px;">
@@ -109,30 +88,24 @@ const repositoriesTablePageCSS = `
 	}
 	.user-profiles {
 		display: flex;
-		gap: 15px;
+		gap: 10px;
 		align-items: center;
+		margin-right: 15px;
 	}
 	.user-profile {
 		display: flex;
-		flex-direction: column;
 		align-items: center;
-		gap: 4px;
 	}
 	.profile-avatar {
-		width: 40px;
-		height: 40px;
+		width: 32px;
+		height: 32px;
 		border-radius: 50%;
 		border: 2px solid var(--border);
 		transition: transform 0.2s, border-color 0.2s;
 	}
 	.profile-avatar:hover {
-		transform: scale(1.1);
+		transform: scale(1.15);
 		border-color: var(--link-color);
-	}
-	.profile-username {
-		font-size: 11px;
-		color: var(--text-secondary);
-		text-align: center;
 	}
 	.filter-input {
 		padding: 8px 12px;
@@ -356,7 +329,11 @@ func repositoriesTableScript() string {
 		eventSource.addEventListener('repository', (e) => {
 			const repo = JSON.parse(e.data);
 			loadedCount++;
-			progressInfo.textContent = 'Loading repositories: ' + loadedCount + '/' + totalCount + '...';
+			if (totalCount > 0) {
+				progressInfo.textContent = 'Loading repositories: ' + loadedCount + '/' + totalCount + '...';
+			} else {
+				progressInfo.textContent = 'Loading repositories: ' + loadedCount + '...';
+			}
 
 			allRepositories.push(repo);
 

@@ -59,6 +59,37 @@ func (c *CachingClient) GetProjects(ctx context.Context) ([]domain.Project, erro
 	return projects, nil
 }
 
+// GetProjectsPage retrieves a single page of projects (no caching for individual pages).
+func (c *CachingClient) GetProjectsPage(ctx context.Context, page int) ([]domain.Project, bool, error) {
+	// Don't cache individual pages - they're only used during streaming
+	return c.client.GetProjectsPage(ctx, page)
+}
+
+// GetProjectCount retrieves the total project count with caching.
+func (c *CachingClient) GetProjectCount(ctx context.Context) (int, error) {
+	key := "GetProjectCount"
+
+	// Try cache first
+	if cached, found := c.cache.get(key); found {
+		if count, ok := cached.(int); ok {
+			log.Printf("[Cache] %s - HIT (%d projects)", key, count)
+			return count, nil
+		}
+	}
+
+	// Cache miss - fetch from underlying client
+	log.Printf("[Cache] %s - MISS", key)
+	count, err := c.client.GetProjectCount(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	// Store in cache
+	c.cache.set(key, count)
+
+	return count, nil
+}
+
 // GetLatestPipeline retrieves the latest pipeline with caching.
 func (c *CachingClient) GetLatestPipeline(ctx context.Context, projectID, branch string) (*domain.Pipeline, error) {
 	key := fmt.Sprintf("GetLatestPipeline:%s:%s", projectID, branch)

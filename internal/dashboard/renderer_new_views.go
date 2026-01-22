@@ -383,6 +383,81 @@ func formatTimeAgo(t time.Time) string {
 }
 
 // RenderRepositoryDetail renders the detail page for a single repository.
+// RenderRepositoryDetailSkeleton renders the repository detail page skeleton for progressive loading.
+func (r *HTMLRenderer) RenderRepositoryDetailSkeleton(w io.Writer, repositoryID string) error {
+	var sb strings.Builder
+
+	sb.WriteString(htmlHead("Repository - CI Dashboard", "Loading repository details..."))
+	sb.WriteString(pageCSS(`
+		.loading-container { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 400px; }
+		.spinner { border: 4px solid var(--border); border-top: 4px solid var(--link-color); border-radius: 50%; width: 50px; height: 50px; animation: spin 1s linear infinite; }
+		@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+		.loading-text { margin-top: 20px; color: var(--text-secondary); font-size: 16px; }
+		.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 30px; }
+		.stat-card { background: var(--bg-secondary); padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px var(--shadow); transition: background-color 0.3s; }
+		.stat-label { font-size: 14px; color: var(--text-secondary); margin-bottom: 8px; }
+		.stat-value { font-size: 28px; font-weight: 600; color: var(--text-primary); }
+		.skeleton { background: linear-gradient(90deg, var(--bg-secondary) 25%, var(--border) 50%, var(--bg-secondary) 75%); background-size: 200% 100%; animation: loading 1.5s ease-in-out infinite; }
+		@keyframes loading { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+		.skeleton-text { height: 20px; border-radius: 4px; margin-bottom: 10px; }
+		.skeleton-title { height: 40px; width: 60%; border-radius: 4px; margin-bottom: 20px; }
+	`))
+	sb.WriteString(`<body>
+	<div class="container">
+`)
+	sb.WriteString(buildNavigation())
+	sb.WriteString(`
+		<div class="skeleton skeleton-title"></div>
+		<div class="loading-container">
+			<div class="spinner"></div>
+			<div class="loading-text" id="loading-status">Loading repository details...</div>
+		</div>
+
+		<div id="content" style="display: none;">
+			<!-- Content will be populated by JavaScript -->
+		</div>
+	</div>
+	<script>
+		const repositoryID = ` + fmt.Sprintf("%q", repositoryID) + `;
+
+		async function loadRepositoryDetail() {
+			try {
+				const response = await fetch('/api/repository-detail?id=' + encodeURIComponent(repositoryID));
+				if (!response.ok) {
+					throw new Error('Failed to load repository details');
+				}
+
+				const data = await response.json();
+
+				// Hide loading, show content
+				document.querySelector('.loading-container').style.display = 'none';
+				document.querySelector('.skeleton-title').style.display = 'none';
+				const contentDiv = document.getElementById('content');
+				contentDiv.style.display = 'block';
+				contentDiv.innerHTML = data.html;
+			} catch (error) {
+				document.getElementById('loading-status').textContent = 'Error: ' + error.message;
+				document.getElementById('loading-status').style.color = 'var(--status-failed)';
+			}
+		}
+
+		// Load data when page is ready
+		if (document.readyState === 'loading') {
+			document.addEventListener('DOMContentLoaded', loadRepositoryDetail);
+		} else {
+			loadRepositoryDetail();
+		}
+	</script>
+`)
+	sb.WriteString(themeToggleScript())
+	sb.WriteString(`</body>
+</html>
+`)
+
+	_, err := w.Write([]byte(sb.String()))
+	return err
+}
+
 func (r *HTMLRenderer) RenderRepositoryDetail(w io.Writer, repository service.RepositoryWithRuns, mrs []domain.MergeRequest, issues []domain.Issue) error {
 	var sb strings.Builder
 

@@ -133,22 +133,130 @@ func (c *Client) GetProjects(ctx context.Context) ([]domain.Project, error) {
 	key := "GetProjects"
 
 	result, err := c.doRequestWithDedup(ctx, key, func() (interface{}, error) {
-		// Fetch all accessible projects (not just direct membership)
+		// Fetch all accessible projects page by page
 		// This works better with organization/group-based access
-		url := fmt.Sprintf("%s/api/v4/projects?per_page=100", c.baseURL)
+		var allProjects []domain.Project
+		page := 1
 
-		var glProjects []gitlabProject
-		if err := c.doRequest(ctx, url, &glProjects); err != nil {
-			return nil, fmt.Errorf("failed to get projects: %w", err)
+		for {
+			pageProjects, hasNext, err := c.GetProjectsPage(ctx, page)
+			if err != nil {
+				return nil, err
+			}
+
+			allProjects = append(allProjects, pageProjects...)
+
+			if !hasNext {
+				break
+			}
+
+			page++
 		}
 
-		return c.convertProjects(glProjects), nil
+		log.Printf("[GitLab] GetProjects - completed, fetched %d total projects", len(allProjects))
+
+		return allProjects, nil
 	})
 
 	if err != nil {
 		return nil, err
 	}
 	return result.([]domain.Project), nil
+}
+
+// GetProjectsPage fetches a single page of projects.
+// GetProjectCount returns the total number of projects.
+func (c *Client) GetProjectCount(ctx context.Context) (int, error) {
+	// Make a lightweight request to get count from headers
+	url := fmt.Sprintf("%s/api/v4/projects?per_page=1&page=1", c.baseURL)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return 0, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("PRIVATE-TOKEN", c.token)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return 0, fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	// Read total count from header
+	totalHeader := resp.Header.Get("X-Total")
+	if totalHeader == "" {
+		return 0, fmt.Errorf("X-Total header not found")
+	}
+
+	var total int
+	if _, err := fmt.Sscanf(totalHeader, "%d", &total); err != nil {
+		return 0, fmt.Errorf("failed to parse X-Total header: %w", err)
+	}
+
+	log.Printf("[GitLab] GetProjectCount: %d", total)
+	return total, nil
+}
+
+func (c *Client) GetProjectsPage(ctx context.Context, page int) ([]domain.Project, bool, error) {
+	// Order by last activity (commits, MRs, issues) - most recent first
+	url := fmt.Sprintf("%s/api/v4/projects?per_page=100&page=%d&order_by=last_activity_at&sort=desc", c.baseURL, page)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("PRIVATE-TOKEN", c.token)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, false, fmt.Errorf("request failed: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, false, fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	// Decode this page's projects
+	var glProjects []gitlabProject
+	if err := json.NewDecoder(resp.Body).Decode(&glProjects); err != nil {
+		resp.Body.Close()
+		return nil, false, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	// Get pagination info from headers
+	totalPages := resp.Header.Get("X-Total-Pages")
+	resp.Body.Close()
+
+	// Convert projects from this page
+	pageProjects := c.convertProjects(glProjects)
+
+	var totalPagesInt int
+	hasNextPage := false
+	if totalPages != "" {
+		fmt.Sscanf(totalPages, "%d", &totalPagesInt)
+		hasNextPage = page < totalPagesInt
+		log.Printf("[GitLab] GetProjectsPage %d/%d (fetched %d projects)", page, totalPagesInt, len(glProjects))
+	} else {
+		log.Printf("[GitLab] GetProjectsPage %d (fetched %d projects)", page, len(glProjects))
+	}
+
+	// Check if there are more pages
+	if len(glProjects) == 0 {
+		hasNextPage = false
+	}
+
+	return pageProjects, hasNextPage, nil
 }
 
 // GetLatestPipeline retrieves the most recent pipeline for a project and branch.
@@ -436,7 +544,8 @@ func (c *Client) GetCurrentUser(ctx context.Context) (*domain.UserProfile, error
 		profile := &domain.UserProfile{
 			Username:  glUser.Username,
 			Name:      glUser.Name,
-			AvatarURL: glUser.AvatarURL,
+			Email:     glUser.Email,
+			AvatarURL: glUser.AvatarURL, // Use GitLab's native avatar URL (often Gravatar)
 			WebURL:    glUser.WebURL,
 			Platform:  "gitlab",
 		}
@@ -458,6 +567,7 @@ func (c *Client) convertMergeRequest(glMR gitlabMergeRequest, projectID string) 
 		Title:        glMR.Title,
 		Description:  glMR.Description,
 		State:        glMR.State,
+		IsDraft:      glMR.Draft,
 		SourceBranch: glMR.SourceBranch,
 		TargetBranch: glMR.TargetBranch,
 		Author:       glMR.Author.Username,
@@ -498,16 +608,17 @@ func (c *Client) convertIssue(glIssue gitlabIssue, projectID string) domain.Issu
 
 // GitLab MergeRequest type
 type gitlabMergeRequest struct {
-	IID          int       `json:"iid"`
-	Title        string    `json:"title"`
-	Description  string    `json:"description"`
-	State        string    `json:"state"`
-	SourceBranch string    `json:"source_branch"`
-	TargetBranch string    `json:"target_branch"`
+	IID          int        `json:"iid"`
+	Title        string     `json:"title"`
+	Description  string     `json:"description"`
+	State        string     `json:"state"`
+	Draft        bool       `json:"draft"` // true if MR is in draft/WIP mode
+	SourceBranch string     `json:"source_branch"`
+	TargetBranch string     `json:"target_branch"`
 	Author       gitlabUser `json:"author"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
-	WebURL       string    `json:"web_url"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+	WebURL       string     `json:"web_url"`
 }
 
 // GitLab Issue type
@@ -526,8 +637,10 @@ type gitlabIssue struct {
 
 // GitLab User type
 type gitlabUser struct {
+	ID        int    `json:"id"`
 	Username  string `json:"username"`
 	Name      string `json:"name"`
+	Email     string `json:"email"`
 	AvatarURL string `json:"avatar_url"`
 	WebURL    string `json:"web_url"`
 }

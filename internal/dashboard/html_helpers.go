@@ -3,6 +3,8 @@ package dashboard
 import (
 	"fmt"
 	"strings"
+
+	"github.com/vilaca/ci-dashboard/internal/domain"
 )
 
 // htmlHead returns the common HTML head section with proper meta tags.
@@ -174,6 +176,32 @@ func commonCSS() string {
 			display: flex;
 			gap: 10px;
 			flex-wrap: wrap;
+			align-items: center;
+		}
+
+		.user-profiles {
+			display: flex;
+			gap: 8px;
+			align-items: center;
+			margin-left: auto;
+		}
+
+		.user-profile {
+			display: flex;
+			align-items: center;
+		}
+
+		.profile-avatar {
+			width: 30px;
+			height: 30px;
+			border-radius: 50%;
+			border: 2px solid var(--border);
+			transition: transform 0.2s, border-color 0.2s;
+		}
+
+		.profile-avatar:hover {
+			transform: scale(1.15);
+			border-color: var(--link-color);
 		}
 
 		.refresh-btn {
@@ -723,7 +751,13 @@ func htmlFooter() string {
 
 // buildNavigation returns the common navigation bar HTML.
 func buildNavigation() string {
-	return `<div class="nav">
+	return buildNavigationWithProfiles(nil)
+}
+
+func buildNavigationWithProfiles(userProfiles []domain.UserProfile) string {
+	var sb strings.Builder
+
+	sb.WriteString(`<div class="nav">
 			<a href="/">Repositories</a>
 			<a href="/pipelines">Recent Pipelines</a>
 			<a href="/pipelines/failed">Failed Pipelines</a>
@@ -734,8 +768,26 @@ func buildNavigation() string {
 		</div>
 		<div class="action-buttons">
 			<button class="refresh-btn" onclick="location.reload()" aria-label="Refresh page">🔄 Refresh</button>
-			<button class="theme-toggle" onclick="toggleTheme()" aria-label="Toggle theme">🌙 Dark Mode</button>
-		</div>`
+			<button class="theme-toggle" onclick="toggleTheme()" aria-label="Toggle theme">🌙 Dark Mode</button>`)
+
+	// Add user profile avatars on the right
+	if len(userProfiles) > 0 {
+		sb.WriteString(`<div class="user-profiles">`)
+		for _, profile := range userProfiles {
+			// Use local avatar endpoint: /api/avatar/{platform}/{username}
+			avatarSrc := fmt.Sprintf("/api/avatar/%s/%s", profile.Platform, profile.Username)
+			sb.WriteString(`<div class="user-profile">
+					<a href="` + escapeHTML(profile.WebURL) + `" target="_blank" rel="noopener noreferrer" title="` + escapeHTML(profile.Name) + ` (` + escapeHTML(profile.Username) + `)">
+						<img src="` + avatarSrc + `" alt="` + escapeHTML(profile.Username) + `" class="profile-avatar" onerror="this.style.display='none'">
+					</a>
+				</div>`)
+		}
+		sb.WriteString(`</div>`)
+	}
+
+	sb.WriteString(`</div>`)
+
+	return sb.String()
 }
 
 // escapeHTML escapes special HTML characters to prevent XSS.

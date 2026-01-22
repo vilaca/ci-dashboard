@@ -20,6 +20,7 @@ type Renderer interface {
 	RenderRepositoriesSkeleton(w io.Writer, userProfiles []domain.UserProfile) error
 	RenderRecentPipelines(w io.Writer, pipelines []domain.Pipeline) error
 	RenderRepositoryDetail(w io.Writer, repository service.RepositoryWithRuns, mrs []domain.MergeRequest, issues []domain.Issue) error
+	RenderRepositoryDetailSkeleton(w io.Writer, repositoryID string) error
 	RenderFailedPipelines(w io.Writer, pipelines []domain.Pipeline) error
 	RenderMergeRequests(w io.Writer, mrs []domain.MergeRequest) error
 	RenderIssues(w io.Writer, issues []domain.Issue) error
