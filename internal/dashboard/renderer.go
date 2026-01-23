@@ -11,7 +11,7 @@ import (
 // This interface follows Interface Segregation Principle (SOLID-I).
 type Renderer interface {
 	RenderHealth(w io.Writer) error
-	RenderRepositoriesSkeleton(w io.Writer, userProfiles []domain.UserProfile) error
+	RenderRepositoriesSkeleton(w io.Writer, userProfiles []domain.UserProfile, refreshInterval int) error
 	RenderRepositoryDetail(w io.Writer, repository service.RepositoryWithRuns, mrs []domain.MergeRequest, issues []domain.Issue) error
 	RenderRepositoryDetailSkeleton(w io.Writer, repositoryID string) error
 }

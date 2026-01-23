@@ -15,16 +15,18 @@ import (
 
 // mockRenderer is a test double for Renderer (follows FIRST - Independent).
 type mockRenderer struct {
-	indexErr             error
-	healthErr            error
-	pipelinesErr         error
-	pipelinesGroupedErr  error
-	repositoriesErr      error
-	recentPipelinesErr   error
-	repositoryDetailErr  error
-	failedPipelinesErr   error
-	mergeRequestsErr     error
-	issuesErr            error
+	indexErr                      error
+	healthErr                     error
+	pipelinesErr                  error
+	pipelinesGroupedErr           error
+	repositoriesErr               error
+	repositoriesSkeletonErr       error
+	recentPipelinesErr            error
+	repositoryDetailErr           error
+	repositoryDetailSkeletonErr   error
+	failedPipelinesErr            error
+	mergeRequestsErr              error
+	issuesErr                     error
 }
 
 func (m *mockRenderer) RenderIndex(w io.Writer) error {
@@ -114,6 +116,22 @@ func (m *mockRenderer) RenderBranches(w io.Writer, branches []domain.BranchWithP
 
 func (m *mockRenderer) RenderYourBranches(w io.Writer, branches []domain.BranchWithPipeline, gitlabUsername, githubUsername string) error {
 	_, err := w.Write([]byte("mock your branches"))
+	return err
+}
+
+func (m *mockRenderer) RenderRepositoriesSkeleton(w io.Writer, userProfiles []domain.UserProfile, refreshInterval int) error {
+	if m.repositoriesSkeletonErr != nil {
+		return m.repositoriesSkeletonErr
+	}
+	_, err := w.Write([]byte("mock repositories skeleton"))
+	return err
+}
+
+func (m *mockRenderer) RenderRepositoryDetailSkeleton(w io.Writer, repositoryID string) error {
+	if m.repositoryDetailSkeletonErr != nil {
+		return m.repositoryDetailSkeletonErr
+	}
+	_, err := w.Write([]byte("mock repository detail skeleton"))
 	return err
 }
 
@@ -217,7 +235,7 @@ func TestHandleHealth(t *testing.T) {
 	renderer := &mockRenderer{}
 	logger := &mockLogger{}
 	pipelineService := &mockPipelineService{}
-	handler := NewHandler(renderer, logger, pipelineService, 3, 50, "", "")
+	handler := NewHandler(renderer, logger, pipelineService, 3, 50, 5, "", "")
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 
@@ -249,7 +267,7 @@ func TestHandleHealth_RenderError(t *testing.T) {
 	renderer := &mockRenderer{healthErr: errors.New("render error")}
 	logger := &mockLogger{}
 	pipelineService := &mockPipelineService{}
-	handler := NewHandler(renderer, logger, pipelineService, 3, 50, "", "")
+	handler := NewHandler(renderer, logger, pipelineService, 3, 50, 5, "", "")
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 
@@ -275,7 +293,7 @@ func TestHandleIndex(t *testing.T) {
 	renderer := &mockRenderer{}
 	logger := &mockLogger{}
 	pipelineService := &mockPipelineService{}
-	handler := NewHandler(renderer, logger, pipelineService, 3, 50, "", "")
+	handler := NewHandler(renderer, logger, pipelineService, 3, 50, 5, "", "")
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 
@@ -306,7 +324,7 @@ func TestHandleIndex_RenderError(t *testing.T) {
 	renderer := &mockRenderer{repositoriesErr: errors.New("render error")}
 	logger := &mockLogger{}
 	pipelineService := &mockPipelineService{}
-	handler := NewHandler(renderer, logger, pipelineService, 3, 50, "", "")
+	handler := NewHandler(renderer, logger, pipelineService, 3, 50, 5, "", "")
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 
@@ -338,7 +356,7 @@ func TestHandlePipelines(t *testing.T) {
 			}, nil
 		},
 	}
-	handler := NewHandler(renderer, logger, pipelineService, 3, 50, "", "")
+	handler := NewHandler(renderer, logger, pipelineService, 3, 50, 5, "", "")
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 
@@ -368,7 +386,7 @@ func TestHandlePipelines_ServiceError(t *testing.T) {
 			return nil, errors.New("service error")
 		},
 	}
-	handler := NewHandler(renderer, logger, pipelineService, 3, 50, "", "")
+	handler := NewHandler(renderer, logger, pipelineService, 3, 50, 5, "", "")
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 
@@ -396,7 +414,7 @@ func TestNewHandler(t *testing.T) {
 	pipelineService := &mockPipelineService{}
 
 	// Act
-	handler := NewHandler(renderer, logger, pipelineService, 3, 50, "", "")
+	handler := NewHandler(renderer, logger, pipelineService, 3, 50, 5, "", "")
 
 	// Assert
 	if handler == nil {

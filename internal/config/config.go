@@ -35,6 +35,9 @@ type Config struct {
 	GitLabCacheDurationSeconds int // Duration to cache GitLab API responses (default: 1800 = 30 minutes)
 	GitHubCacheDurationSeconds int // Duration to cache GitHub API responses (default: 1800 = 30 minutes)
 
+	// UI configuration
+	UIRefreshIntervalSeconds int // How often UI auto-refreshes data in seconds (default: 5)
+
 	// Current user configuration (for filtering "your branches")
 	GitLabCurrentUser string // GitLab username for filtering branches (from GITLAB_USER)
 	GitHubCurrentUser string // GitHub username for filtering branches (from GITHUB_USER)
@@ -61,6 +64,9 @@ type yamlConfig struct {
 		RunsPerRepository    int `yaml:"runs_per_repository"`
 		RecentPipelinesLimit int `yaml:"recent_pipelines_limit"`
 	} `yaml:"display"`
+	UI struct {
+		RefreshIntervalSeconds int `yaml:"refresh_interval_seconds"`
+	} `yaml:"ui"`
 }
 
 // Load loads configuration from YAML file (if exists) and environment variables.
@@ -196,6 +202,15 @@ func Load() (*Config, error) {
 		}
 	}
 
+	uiRefreshInterval := 5 // 5 seconds default
+	if refreshStr := os.Getenv("UI_REFRESH_INTERVAL_SECONDS"); refreshStr != "" {
+		if r, err := strconv.Atoi(refreshStr); err == nil && r > 0 {
+			uiRefreshInterval = r
+		}
+	} else if yc.UI.RefreshIntervalSeconds != 0 {
+		uiRefreshInterval = yc.UI.RefreshIntervalSeconds
+	}
+
 	return &Config{
 		Port:                       port,
 		GitLabURL:                  gitlabURL,
@@ -208,6 +223,7 @@ func Load() (*Config, error) {
 		RecentPipelinesLimit:       recentLimit,
 		GitLabCacheDurationSeconds: gitlabCacheDuration,
 		GitHubCacheDurationSeconds: githubCacheDuration,
+		UIRefreshIntervalSeconds:   uiRefreshInterval,
 		GitLabCurrentUser:          gitlabCurrentUser,
 		GitHubCurrentUser:          githubCurrentUser,
 	}, nil

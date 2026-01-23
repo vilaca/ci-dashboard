@@ -127,7 +127,7 @@ func buildServer(cfg *config.Config) (http.Handler, *service.BackgroundRefresher
 	}
 
 	// Create handler with dependencies (Dependency Injection)
-	handler := dashboard.NewHandler(renderer, logger, pipelineService, cfg.RunsPerRepository, cfg.RecentPipelinesLimit, cfg.GitLabCurrentUser, cfg.GitHubCurrentUser)
+	handler := dashboard.NewHandler(renderer, logger, pipelineService, cfg.RunsPerRepository, cfg.RecentPipelinesLimit, cfg.UIRefreshIntervalSeconds, cfg.GitLabCurrentUser, cfg.GitHubCurrentUser)
 
 	// Register routes
 	mux := http.NewServeMux()

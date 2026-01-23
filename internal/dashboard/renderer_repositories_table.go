@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"fmt"
 	"io"
 	"strings"
 
@@ -8,7 +9,7 @@ import (
 )
 
 // RenderRepositoriesSkeleton renders the repositories page skeleton for progressive loading.
-func (r *HTMLRenderer) RenderRepositoriesSkeleton(w io.Writer, userProfiles []domain.UserProfile) error {
+func (r *HTMLRenderer) RenderRepositoriesSkeleton(w io.Writer, userProfiles []domain.UserProfile, refreshInterval int) error {
 	var sb strings.Builder
 
 	sb.WriteString(htmlHead("Repositories - CI Dashboard", "Monitor CI/CD pipeline runs across all repositories"))
@@ -65,6 +66,7 @@ func (r *HTMLRenderer) RenderRepositoriesSkeleton(w io.Writer, userProfiles []do
 	</div>
 `)
 	sb.WriteString(themeToggleScript())
+	sb.WriteString(fmt.Sprintf(`<script>const REFRESH_INTERVAL_SECONDS = %d;</script>`, refreshInterval))
 	sb.WriteString(repositoriesTableScript())
 	sb.WriteString(`</body>
 </html>
@@ -269,6 +271,7 @@ func repositoriesTableScript() string {
 		const progressInfo = document.getElementById('progress-info');
 		let loadedCount = 0;
 		let totalCount = 0;
+		let allLoaded = false;
 		let allRepositories = [];
 
 		// Favorites management
@@ -332,6 +335,7 @@ func repositoriesTableScript() string {
 				allRepositories = data.repositories || [];
 				totalCount = data.pagination ? data.pagination.total : allRepositories.length;
 				loadedCount = allRepositories.length;
+				allLoaded = data.pagination ? !data.pagination.hasNext : true;
 
 				allRepositories.sort((a, b) => {
 					const aFav = isFavorite(a.Project.ID);
@@ -352,8 +356,14 @@ func repositoriesTableScript() string {
 				});
 
 				renderAllRepositories();
-				progressInfo.textContent = '✓ Loaded all ' + loadedCount + ' repositories';
-				progressInfo.style.color = 'var(--status-success)';
+
+				if (allLoaded) {
+					progressInfo.textContent = '✓ Loaded ' + loadedCount + ' repositories';
+					progressInfo.style.color = 'var(--status-success)';
+				} else {
+					progressInfo.textContent = loadedCount + '+ repositories (loading...)';
+					progressInfo.style.color = 'var(--text-secondary)';
+				}
 			})
 			.catch(error => {
 				console.error('Error loading repositories:', error);
@@ -477,6 +487,108 @@ func repositoriesTableScript() string {
 			}
 			const years = Math.floor(diffDays / 365);
 			return years + ' year' + (years !== 1 ? 's' : '') + ' ago';
+		}
+
+		// Auto-refresh functionality
+		if (REFRESH_INTERVAL_SECONDS > 0) {
+			setInterval(() => {
+				fetch('/api/repositories?limit=10000')
+					.then(response => {
+						if (!response.ok) {
+							throw new Error('Failed to fetch repositories');
+						}
+						return response.json();
+					})
+					.then(data => {
+						const newRepositories = data.repositories || [];
+						const newTotalCount = data.pagination ? data.pagination.total : newRepositories.length;
+						const newAllLoaded = data.pagination ? !data.pagination.hasNext : true;
+
+						// Create a map of current repositories by ID for quick lookup
+						const currentRepoMap = new Map();
+						allRepositories.forEach(repo => {
+							currentRepoMap.set(repo.Project.ID, repo);
+						});
+
+						// Create a map of new repositories by ID
+						const newRepoMap = new Map();
+						newRepositories.forEach(repo => {
+							newRepoMap.set(repo.Project.ID, repo);
+						});
+
+						// Find added and removed repositories
+						const addedRepos = newRepositories.filter(repo => !currentRepoMap.has(repo.Project.ID));
+						const removedRepoIDs = Array.from(currentRepoMap.keys()).filter(id => !newRepoMap.has(id));
+
+						// Update existing repositories and track changes
+						let hasChanges = false;
+						newRepositories.forEach(newRepo => {
+							const existingRepo = currentRepoMap.get(newRepo.Project.ID);
+							if (existingRepo) {
+								// Check if data has changed
+								if (JSON.stringify(existingRepo) !== JSON.stringify(newRepo)) {
+									hasChanges = true;
+									// Update the existing repo in allRepositories
+									const index = allRepositories.findIndex(r => r.Project.ID === newRepo.Project.ID);
+									if (index !== -1) {
+										allRepositories[index] = newRepo;
+									}
+								}
+							}
+						});
+
+						// Add new repositories
+						if (addedRepos.length > 0) {
+							hasChanges = true;
+							allRepositories = allRepositories.concat(addedRepos);
+						}
+
+						// Remove deleted repositories
+						if (removedRepoIDs.length > 0) {
+							hasChanges = true;
+							allRepositories = allRepositories.filter(repo => !removedRepoIDs.includes(repo.Project.ID));
+						}
+
+						// Update the progress info with current count
+						totalCount = newTotalCount;
+						loadedCount = allRepositories.length;
+						allLoaded = newAllLoaded;
+
+						if (allLoaded) {
+							progressInfo.textContent = '✓ Loaded ' + loadedCount + ' repositories';
+							progressInfo.style.color = 'var(--status-success)';
+						} else {
+							progressInfo.textContent = loadedCount + '+ repositories (loading...)';
+							progressInfo.style.color = 'var(--text-secondary)';
+						}
+
+						// Re-sort and re-render if there were any changes
+						if (hasChanges || addedRepos.length > 0 || removedRepoIDs.length > 0) {
+							allRepositories.sort((a, b) => {
+								const aFav = isFavorite(a.Project.ID);
+								const bFav = isFavorite(b.Project.ID);
+								if (aFav && !bFav) return -1;
+								if (!aFav && bFav) return 1;
+
+								if (!a.DefaultBranch || !a.DefaultBranch.LastCommitDate) return 1;
+								if (!b.DefaultBranch || !b.DefaultBranch.LastCommitDate) return -1;
+
+								const dateA = new Date(a.DefaultBranch.LastCommitDate);
+								const dateB = new Date(b.DefaultBranch.LastCommitDate);
+
+								if (dateA.getFullYear() < 1970) return 1;
+								if (dateB.getFullYear() < 1970) return -1;
+
+								return dateB - dateA;
+							});
+
+							renderAllRepositories();
+						}
+					})
+					.catch(error => {
+						console.error('Auto-refresh error:', error);
+					});
+			}, REFRESH_INTERVAL_SECONDS * 1000);
 		}
 	</script>
 `

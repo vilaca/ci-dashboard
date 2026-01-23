@@ -20,15 +20,16 @@ import (
 // Handler handles HTTP requests for the dashboard.
 // Each handler method has a Single Responsibility (SRP).
 type Handler struct {
-	renderer          Renderer
-	logger            Logger
-	pipelineService   PipelineService
-	runsPerRepo       int
-	recentLimit       int
-	gitlabCurrentUser string
-	githubCurrentUser string
-	avatarCache       map[string][]byte // platform:username -> image data
-	avatarCacheMu     sync.RWMutex
+	renderer            Renderer
+	logger              Logger
+	pipelineService     PipelineService
+	runsPerRepo         int
+	recentLimit         int
+	uiRefreshInterval   int
+	gitlabCurrentUser   string
+	githubCurrentUser   string
+	avatarCache         map[string][]byte // platform:username -> image data
+	avatarCacheMu       sync.RWMutex
 }
 
 // Logger interface for logging operations (Interface Segregation Principle).
@@ -62,13 +63,14 @@ type RepositoryWithRuns = service.RepositoryWithRuns
 
 // NewHandler creates a new Handler with injected dependencies (Dependency Inversion Principle).
 // This follows IoC (Inversion of Control) by accepting dependencies rather than creating them.
-func NewHandler(renderer Renderer, logger Logger, pipelineService PipelineService, runsPerRepo, recentLimit int, gitlabCurrentUser, githubCurrentUser string) *Handler {
+func NewHandler(renderer Renderer, logger Logger, pipelineService PipelineService, runsPerRepo, recentLimit, uiRefreshInterval int, gitlabCurrentUser, githubCurrentUser string) *Handler {
 	return &Handler{
 		renderer:          renderer,
 		logger:            logger,
 		pipelineService:   pipelineService,
 		runsPerRepo:       runsPerRepo,
 		recentLimit:       recentLimit,
+		uiRefreshInterval: uiRefreshInterval,
 		gitlabCurrentUser: gitlabCurrentUser,
 		githubCurrentUser: githubCurrentUser,
 		avatarCache:       make(map[string][]byte),
@@ -121,7 +123,7 @@ func (h *Handler) handleRepositories(w http.ResponseWriter, r *http.Request) {
 	wg.Wait()
 
 	// Render empty page skeleton with user profiles
-	if err := h.renderer.RenderRepositoriesSkeleton(w, userProfiles); err != nil {
+	if err := h.renderer.RenderRepositoriesSkeleton(w, userProfiles, h.uiRefreshInterval); err != nil {
 		h.logger.Printf("failed to render repositories skeleton: %v", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
