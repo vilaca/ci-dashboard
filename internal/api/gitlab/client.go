@@ -244,14 +244,17 @@ func (c *Client) GetProjectsPage(ctx context.Context, page int) ([]domain.Projec
 	var totalPagesInt int
 	hasNextPage := false
 	if totalPages != "" {
+		// Header available - use it
 		fmt.Sscanf(totalPages, "%d", &totalPagesInt)
 		hasNextPage = page < totalPagesInt
 		log.Printf("[GitLab] GetProjectsPage %d/%d (fetched %d projects)", page, totalPagesInt, len(glProjects))
 	} else {
-		log.Printf("[GitLab] GetProjectsPage %d (fetched %d projects)", page, len(glProjects))
+		// No header - assume more pages if we got a full page (100 projects)
+		hasNextPage = len(glProjects) >= 100
+		log.Printf("[GitLab] GetProjectsPage %d (fetched %d projects, hasNext=%v)", page, len(glProjects), hasNextPage)
 	}
 
-	// Check if there are more pages
+	// If no projects returned, definitely no more pages
 	if len(glProjects) == 0 {
 		hasNextPage = false
 	}

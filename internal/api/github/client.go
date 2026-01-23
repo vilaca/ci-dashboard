@@ -273,9 +273,14 @@ func (c *Client) GetProjectsPage(ctx context.Context, page int) ([]domain.Projec
 	// Convert projects from this page
 	pageProjects := c.convertProjects(ghRepos)
 
+	// If Link header is missing, assume more pages if we got a full page (100 repos)
+	if linkHeader == "" && len(ghRepos) >= 100 {
+		hasNextPage = true
+	}
+
 	log.Printf("[GitHub] GetProjectsPage %d (fetched %d repositories, has next: %v)", page, len(ghRepos), hasNextPage)
 
-	// Check if there are more pages
+	// If no repositories returned, definitely no more pages
 	if len(ghRepos) == 0 {
 		hasNextPage = false
 	}

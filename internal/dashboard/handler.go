@@ -174,14 +174,40 @@ func (h *Handler) handleRepositoriesBulk(w http.ResponseWriter, r *http.Request)
 
 	results := make([]RepositoryDefaultBranch, 0, len(projects))
 	for _, project := range projects {
+		// Fetch cached data for this project
+		defaultBranch, pipeline, branchCount, _ := h.pipelineService.GetDefaultBranchForProject(ctx, project)
+
+		// Fetch cached MRs for this project
+		mrs, _ := h.pipelineService.GetMergeRequestsForProject(ctx, project)
+
+		// Count open and draft MRs
+		openMRCount := 0
+		draftMRCount := 0
+		reviewingCount := 0
+		for _, mr := range mrs {
+			if mr.State == "opened" {
+				openMRCount++
+				if mr.IsDraft {
+					draftMRCount++
+				}
+				// Check if current user is a reviewer
+				for _, reviewer := range mr.Reviewers {
+					if reviewer == h.gitlabCurrentUser || reviewer == h.githubCurrentUser {
+						reviewingCount++
+						break
+					}
+				}
+			}
+		}
+
 		results = append(results, RepositoryDefaultBranch{
 			Project:        project,
-			DefaultBranch:  nil,
-			Pipeline:       nil,
-			BranchCount:    0,
-			OpenMRCount:    0,
-			DraftMRCount:   0,
-			ReviewingCount: 0,
+			DefaultBranch:  defaultBranch,
+			Pipeline:       pipeline,
+			BranchCount:    branchCount,
+			OpenMRCount:    openMRCount,
+			DraftMRCount:   draftMRCount,
+			ReviewingCount: reviewingCount,
 		})
 	}
 

@@ -38,41 +38,24 @@ func (s *PipelineService) RegisterClient(platform string, client api.Client) {
 	s.clients[platform] = client
 }
 
-// ForceRefreshAllCaches forces all clients to fetch fresh data and populate their caches.
+// ForceRefreshAllCaches forces all clients to fetch fresh data page-by-page and populate their caches.
 // This is used by the background refresher to initially populate caches.
+// Fetches one page of projects at a time, then fetches all related data for those projects.
 func (s *PipelineService) ForceRefreshAllCaches(ctx context.Context) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// Define cache keys that need to be force-refreshed
-	keysToRefresh := []string{
-		"GetProjects",
-		"GetProjectCount",
-	}
-
-	var errChan = make(chan error, len(s.clients)*len(keysToRefresh))
 	var wg sync.WaitGroup
+	errChan := make(chan error, len(s.clients))
 
 	for platform, client := range s.clients {
-		// Check if client supports force refresh
-		type forceRefresher interface {
-			ForceRefresh(ctx context.Context, key string) error
-		}
-
-		refresher, ok := client.(forceRefresher)
-		if !ok {
-			continue
-		}
-
-		for _, key := range keysToRefresh {
-			wg.Add(1)
-			go func(p, k string, r forceRefresher) {
-				defer wg.Done()
-				if err := r.ForceRefresh(ctx, k); err != nil {
-					errChan <- fmt.Errorf("%s ForceRefresh(%s): %w", p, k, err)
-				}
-			}(platform, key, refresher)
-		}
+		wg.Add(1)
+		go func(p string, c api.Client) {
+			defer wg.Done()
+			if err := s.forceRefreshClientPageByPage(ctx, p, c); err != nil {
+				errChan <- fmt.Errorf("%s: %w", p, err)
+			}
+		}(platform, client)
 	}
 
 	wg.Wait()
@@ -86,6 +69,136 @@ func (s *PipelineService) ForceRefreshAllCaches(ctx context.Context) error {
 
 	if len(errs) > 0 {
 		return fmt.Errorf("force refresh errors: %v", errs)
+	}
+
+	return nil
+}
+
+// forceRefreshClientPageByPage fetches projects page-by-page and all related data for each page.
+func (s *PipelineService) forceRefreshClientPageByPage(ctx context.Context, platform string, client api.Client) error {
+	fmt.Printf("[%s] Starting page-by-page refresh...\n", platform)
+
+	// Check if client is a stale caching client
+	type staleCacher interface {
+		GetProjectsPage(ctx context.Context, page int) ([]domain.Project, bool, error)
+		ForceRefresh(ctx context.Context, key string) error
+		PopulateProjects(projects []domain.Project)
+	}
+
+	cacher, ok := client.(staleCacher)
+	if !ok {
+		return fmt.Errorf("client does not support page-by-page refresh")
+	}
+
+	page := 1
+	var allProjects []domain.Project
+
+	for {
+		// Fetch one page of projects
+		projects, hasNext, err := cacher.GetProjectsPage(ctx, page)
+		if err != nil {
+			return fmt.Errorf("failed to fetch page %d: %w", page, err)
+		}
+
+		if len(projects) == 0 {
+			break
+		}
+
+		fmt.Printf("[%s] Page %d: fetched %d projects\n", platform, page, len(projects))
+
+		// Process each project individually and cache incrementally
+		for i, project := range projects {
+			// Add this project to accumulator
+			allProjects = append(allProjects, project)
+
+			// Cache immediately after each project (1, 2, 3... 17...)
+			cacher.PopulateProjects(allProjects)
+
+			// Log progress every 10 projects to avoid spam
+			if (i+1)%10 == 0 || i == len(projects)-1 {
+				fmt.Printf("[%s] Cached %d projects (UI updated)\n", platform, len(allProjects))
+			}
+
+			// Fetch data for this single project
+			if err := s.forceRefreshDataForProjects(ctx, platform, cacher, []domain.Project{project}); err != nil {
+				fmt.Printf("[%s] Warning: failed to fetch data for project %s: %v\n", platform, project.Name, err)
+			}
+		}
+
+		if !hasNext {
+			break
+		}
+
+		page++
+	}
+
+	fmt.Printf("[%s] Completed refresh: %d total projects across %d pages\n", platform, len(allProjects), page)
+	return nil
+}
+
+// forceRefreshDataForProjects fetches all related data for a batch of projects.
+func (s *PipelineService) forceRefreshDataForProjects(ctx context.Context, platform string, client interface{ ForceRefresh(context.Context, string) error }, projects []domain.Project) error {
+	var wg sync.WaitGroup
+	errChan := make(chan error, len(projects)*4) // 4 operations per project max
+
+	for _, project := range projects {
+		projectID := project.ID
+		defaultBranch := project.DefaultBranch
+		if defaultBranch == "" {
+			defaultBranch = "main"
+		}
+
+		// Fetch default branch pipeline
+		wg.Add(1)
+		go func(pid, branch string) {
+			defer wg.Done()
+			key := fmt.Sprintf("GetLatestPipeline:%s:%s", pid, branch)
+			if err := client.ForceRefresh(ctx, key); err != nil {
+				// Try master if main fails
+				if branch == "main" {
+					key = fmt.Sprintf("GetLatestPipeline:%s:master", pid)
+					_ = client.ForceRefresh(ctx, key)
+				}
+			}
+		}(projectID, defaultBranch)
+
+		// Fetch branches
+		wg.Add(1)
+		go func(pid string) {
+			defer wg.Done()
+			key := fmt.Sprintf("GetBranches:%s:50", pid)
+			if err := client.ForceRefresh(ctx, key); err != nil {
+				errChan <- fmt.Errorf("GetBranches %s: %w", pid, err)
+			}
+		}(projectID)
+
+		// Fetch merge requests
+		wg.Add(1)
+		go func(pid string) {
+			defer wg.Done()
+			key := fmt.Sprintf("GetMergeRequests:%s", pid)
+			if err := client.ForceRefresh(ctx, key); err != nil {
+				// Ignore errors - not all clients support this
+			}
+		}(projectID)
+
+		// Fetch issues
+		wg.Add(1)
+		go func(pid string) {
+			defer wg.Done()
+			key := fmt.Sprintf("GetIssues:%s", pid)
+			if err := client.ForceRefresh(ctx, key); err != nil {
+				// Ignore errors - not all clients support this
+			}
+		}(projectID)
+	}
+
+	wg.Wait()
+	close(errChan)
+
+	// Collect errors (but don't fail - just log)
+	for err := range errChan {
+		fmt.Printf("[%s] Warning: %v\n", platform, err)
 	}
 
 	return nil
