@@ -133,12 +133,9 @@ func buildServer(cfg *config.Config) (http.Handler, *service.BackgroundRefresher
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 
-	// Create file cache for persistent caching
-	fileCache := service.NewFileCache("/tmp/ci-dashboard-cache.json", logger)
-
 	// Create background refresher to pre-populate and maintain cache
 	refreshInterval := 5 * time.Minute
-	refresher := service.NewBackgroundRefresher(pipelineService, fileCache, refreshInterval, logger)
+	refresher := service.NewBackgroundRefresher(pipelineService, refreshInterval, logger)
 
 	return mux, refresher
 }

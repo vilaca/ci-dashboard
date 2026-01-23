@@ -12,7 +12,6 @@ import (
 // Follows Single Responsibility Principle - only handles background data fetching.
 type BackgroundRefresher struct {
 	pipelineService *PipelineService
-	fileCache       *FileCache
 	refreshInterval time.Duration
 	logger          Logger
 	stopChan        chan struct{}
@@ -28,11 +27,9 @@ type Logger interface {
 
 // NewBackgroundRefresher creates a new background refresher.
 // Follows Dependency Injection - accepts dependencies via constructor.
-// fileCache can be nil to disable file caching.
-func NewBackgroundRefresher(pipelineService *PipelineService, fileCache *FileCache, refreshInterval time.Duration, logger Logger) *BackgroundRefresher {
+func NewBackgroundRefresher(pipelineService *PipelineService, refreshInterval time.Duration, logger Logger) *BackgroundRefresher {
 	return &BackgroundRefresher{
 		pipelineService: pipelineService,
-		fileCache:       fileCache,
 		refreshInterval: refreshInterval,
 		logger:          logger,
 		stopChan:        make(chan struct{}),
@@ -52,18 +49,6 @@ func (r *BackgroundRefresher) Start() {
 	r.mu.Unlock()
 
 	r.logger.Printf("Background refresher: Starting with %v interval", r.refreshInterval)
-
-	// Load cached data immediately if available (fast - just reads local file)
-	// Then pre-populate the in-memory API caches for instant responses
-	if r.fileCache != nil {
-		if cacheData, err := r.fileCache.Load(); err == nil && cacheData != nil {
-			age := time.Since(cacheData.Timestamp)
-			r.logger.Printf("Background refresher: Loaded cache file (age: %v, projects: %d)",
-				age.Round(time.Second), len(cacheData.Projects))
-
-			r.logger.Printf("Background refresher: Cache data loaded - ready for requests!")
-		}
-	}
 
 	// Start background refresh goroutine (only periodic refreshes)
 	r.wg.Add(1)
@@ -183,21 +168,4 @@ func (r *BackgroundRefresher) refreshData() {
 	duration := time.Since(startTime)
 	r.logger.Printf("Background refresher: Completed in %v (projects: %d, pipelines: %d, branches: %d, MRs: %d, issues: %d, profiles: %d)",
 		duration, projectCount, pipelineCount, branchCount, mrCount, issueCount, profileCount)
-
-	// Save to file cache if enabled
-	if r.fileCache != nil {
-		cacheData := &CacheData{
-			Timestamp: time.Now(),
-			Projects:  projects,
-			Pipelines: pipelines,
-			Branches:  branches,
-			MRs:       mrs,
-			Issues:    issues,
-			Profiles:  profiles,
-		}
-
-		if err := r.fileCache.Save(cacheData); err != nil {
-			r.logger.Printf("Background refresher: Failed to save cache: %v", err)
-		}
-	}
 }

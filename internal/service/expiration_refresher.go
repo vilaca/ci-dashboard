@@ -7,14 +7,12 @@ import (
 	"time"
 
 	"github.com/vilaca/ci-dashboard/internal/api"
-	"github.com/vilaca/ci-dashboard/internal/domain"
 )
 
 // ExpirationRefresher refreshes expired cache entries in the background.
 // Only fetches what's expired, serves stale data immediately.
 type ExpirationRefresher struct {
 	pipelineService *PipelineService
-	fileCache       *FileCache
 	refreshInterval time.Duration
 	logger          *log.Logger
 	stopChan        chan struct{}
@@ -24,11 +22,9 @@ type ExpirationRefresher struct {
 }
 
 // NewExpirationRefresher creates a new expiration-based refresher.
-// fileCache can be nil to disable file cache loading.
-func NewExpirationRefresher(pipelineService *PipelineService, fileCache *FileCache, refreshInterval time.Duration) *ExpirationRefresher {
+func NewExpirationRefresher(pipelineService *PipelineService, refreshInterval time.Duration) *ExpirationRefresher {
 	return &ExpirationRefresher{
 		pipelineService: pipelineService,
-		fileCache:       fileCache,
 		refreshInterval: refreshInterval,
 		logger:          log.Default(),
 		stopChan:        make(chan struct{}),
@@ -46,11 +42,6 @@ func (r *ExpirationRefresher) Start() {
 	r.mu.Unlock()
 
 	r.logger.Printf("[ExpirationRefresher] Starting with %v check interval", r.refreshInterval)
-
-	// Load file cache immediately if available (for instant page loads)
-	if r.fileCache != nil {
-		r.loadAndPrePopulate()
-	}
 
 	// Start background refresh goroutine
 	r.wg.Add(1)
@@ -71,75 +62,6 @@ func (r *ExpirationRefresher) Stop() {
 	close(r.stopChan)
 	r.wg.Wait()
 	r.logger.Printf("[ExpirationRefresher] Stopped")
-}
-
-// loadAndPrePopulate loads file cache and pre-populates in-memory caches.
-func (r *ExpirationRefresher) loadAndPrePopulate() {
-	if r.fileCache == nil {
-		return
-	}
-
-	cacheData, err := r.fileCache.Load()
-	if err != nil || cacheData == nil {
-		r.logger.Printf("[ExpirationRefresher] No file cache to load - will trigger initial fetch")
-		// Trigger initial project fetch in background (non-blocking)
-		go r.initialFetch()
-		return
-	}
-
-	age := time.Since(cacheData.Timestamp)
-	r.logger.Printf("[ExpirationRefresher] Loaded file cache (age: %v, projects: %d)",
-		age.Round(time.Second), len(cacheData.Projects))
-
-	// Pre-populate all clients with cached data
-	r.pipelineService.mu.RLock()
-	clients := make(map[string]interface{})
-	for name, client := range r.pipelineService.clients {
-		clients[name] = client
-	}
-	r.pipelineService.mu.RUnlock()
-
-	for platform, client := range clients {
-		// Check if client supports cache population
-		type cachePopulator interface {
-			PopulateProjects([]domain.Project)
-			PopulatePipelines([]domain.Pipeline)
-			PopulateBranches([]domain.Branch)
-			PopulateMergeRequests([]domain.MergeRequest)
-			PopulateIssues([]domain.Issue)
-			PopulateUserProfiles([]domain.UserProfile)
-		}
-
-		populator, ok := client.(cachePopulator)
-		if !ok {
-			continue
-		}
-
-		r.logger.Printf("[ExpirationRefresher] Pre-populating %s cache...", platform)
-		populator.PopulateProjects(cacheData.Projects)
-		populator.PopulatePipelines(cacheData.Pipelines)
-		populator.PopulateBranches(cacheData.Branches)
-		populator.PopulateMergeRequests(cacheData.MRs)
-		populator.PopulateIssues(cacheData.Issues)
-		populator.PopulateUserProfiles(cacheData.Profiles)
-	}
-
-	r.logger.Printf("[ExpirationRefresher] Cache pre-population complete - ready for requests!")
-}
-
-// initialFetch performs an initial fetch of projects when cache is empty.
-func (r *ExpirationRefresher) initialFetch() {
-	r.logger.Printf("[ExpirationRefresher] Starting initial fetch (cache was empty)...")
-	ctx := context.Background()
-
-	// Fetch projects from all platforms - this will populate the cache
-	projects, err := r.pipelineService.GetAllProjects(ctx)
-	if err != nil {
-		r.logger.Printf("[ExpirationRefresher] Initial fetch failed: %v", err)
-		return
-	}
-
-	r.logger.Printf("[ExpirationRefresher] Initial fetch complete: %d projects loaded", len(projects))
 }
 
 // refreshLoop periodically checks for expired cache entries and refreshes them.
@@ -206,52 +128,9 @@ func (r *ExpirationRefresher) refreshExpired() {
 	if totalExpired > 0 {
 		r.logger.Printf("[ExpirationRefresher] Completed in %v: %d/%d entries refreshed",
 			duration.Round(time.Millisecond), totalRefreshed, totalExpired)
-
-		// Save cache to file after successful refresh
-		if r.fileCache != nil && totalRefreshed > 0 {
-			r.saveCacheToFile(ctx)
-		}
 	} else {
 		r.logger.Printf("[ExpirationRefresher] Completed in %v: No expired entries",
 			duration.Round(time.Millisecond))
-	}
-}
-
-// saveCacheToFile saves current cache state to file.
-func (r *ExpirationRefresher) saveCacheToFile(ctx context.Context) {
-	if r.fileCache == nil {
-		return
-	}
-
-	// Collect all data from service
-	projects, _ := r.pipelineService.GetAllProjects(ctx)
-	branches, _ := r.pipelineService.GetAllBranches(ctx, 50)
-	mrs, _ := r.pipelineService.GetAllMergeRequests(ctx)
-	issues, _ := r.pipelineService.GetAllIssues(ctx)
-	profiles, _ := r.pipelineService.GetUserProfiles(ctx)
-
-	// Collect pipelines from repositories
-	var pipelines []domain.Pipeline
-	repos, _ := r.pipelineService.GetRepositoriesWithRecentRuns(ctx, 3)
-	for _, repo := range repos {
-		pipelines = append(pipelines, repo.Runs...)
-	}
-
-	cacheData := &CacheData{
-		Timestamp: time.Now(),
-		Projects:  projects,
-		Pipelines: pipelines,
-		Branches:  branches,
-		MRs:       mrs,
-		Issues:    issues,
-		Profiles:  profiles,
-	}
-
-	if err := r.fileCache.Save(cacheData); err != nil {
-		r.logger.Printf("[ExpirationRefresher] Failed to save cache to file: %v", err)
-	} else {
-		r.logger.Printf("[ExpirationRefresher] Saved cache to file (%d projects, %d pipelines)",
-			len(projects), len(pipelines))
 	}
 }
 
