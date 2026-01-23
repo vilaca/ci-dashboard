@@ -318,58 +318,48 @@ func repositoriesTableScript() string {
 
 		tbody.innerHTML = '';
 
-		// SSE connection
-		const eventSource = new EventSource('/api/stream/repositories?offset=0&limit=10000');
+		progressInfo.textContent = 'Loading repositories...';
+		progressInfo.style.color = '';
 
-		eventSource.addEventListener('total', (e) => {
-			totalCount = parseInt(e.data);
-			progressInfo.textContent = 'Loading repositories: ' + loadedCount + '/' + totalCount + '...';
-		});
+		fetch('/api/repositories?limit=10000')
+			.then(response => {
+				if (!response.ok) {
+					throw new Error('Failed to fetch repositories');
+				}
+				return response.json();
+			})
+			.then(data => {
+				allRepositories = data.repositories || [];
+				totalCount = data.pagination ? data.pagination.total : allRepositories.length;
+				loadedCount = allRepositories.length;
 
-		eventSource.addEventListener('repository', (e) => {
-			const repo = JSON.parse(e.data);
-			loadedCount++;
-			if (totalCount > 0) {
-				progressInfo.textContent = 'Loading repositories: ' + loadedCount + '/' + totalCount + '...';
-			} else {
-				progressInfo.textContent = 'Loading repositories: ' + loadedCount + '...';
-			}
+				allRepositories.sort((a, b) => {
+					const aFav = isFavorite(a.Project.ID);
+					const bFav = isFavorite(b.Project.ID);
+					if (aFav && !bFav) return -1;
+					if (!aFav && bFav) return 1;
 
-			allRepositories.push(repo);
+					if (!a.DefaultBranch || !a.DefaultBranch.LastCommitDate) return 1;
+					if (!b.DefaultBranch || !b.DefaultBranch.LastCommitDate) return -1;
 
-			// Sort: favorites first, then by commit date
-			allRepositories.sort((a, b) => {
-				const aFav = isFavorite(a.Project.ID);
-				const bFav = isFavorite(b.Project.ID);
-				if (aFav && !bFav) return -1;
-				if (!aFav && bFav) return 1;
+					const dateA = new Date(a.DefaultBranch.LastCommitDate);
+					const dateB = new Date(b.DefaultBranch.LastCommitDate);
 
-				if (!a.DefaultBranch || !a.DefaultBranch.LastCommitDate) return 1;
-				if (!b.DefaultBranch || !b.DefaultBranch.LastCommitDate) return -1;
+					if (dateA.getFullYear() < 1970) return 1;
+					if (dateB.getFullYear() < 1970) return -1;
 
-				const dateA = new Date(a.DefaultBranch.LastCommitDate);
-				const dateB = new Date(b.DefaultBranch.LastCommitDate);
+					return dateB - dateA;
+				});
 
-				if (dateA.getFullYear() < 1970) return 1;
-				if (dateB.getFullYear() < 1970) return -1;
-
-				return dateB - dateA;
+				renderAllRepositories();
+				progressInfo.textContent = '✓ Loaded all ' + loadedCount + ' repositories';
+				progressInfo.style.color = 'var(--status-success)';
+			})
+			.catch(error => {
+				console.error('Error loading repositories:', error);
+				progressInfo.textContent = '✗ Error loading repositories';
+				progressInfo.style.color = 'var(--status-failed)';
 			});
-
-			renderAllRepositories();
-		});
-
-		eventSource.addEventListener('done', () => {
-			eventSource.close();
-			progressInfo.textContent = '✓ Loaded all ' + loadedCount + ' repositories';
-			progressInfo.style.color = 'var(--status-success)';
-		});
-
-		eventSource.addEventListener('error', (e) => {
-			eventSource.close();
-			progressInfo.textContent = '✗ Error loading repositories';
-			progressInfo.style.color = 'var(--status-failed)';
-		});
 
 		function escapeHtml(text) {
 			const div = document.createElement('div');

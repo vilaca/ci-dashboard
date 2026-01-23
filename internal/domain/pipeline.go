@@ -57,4 +57,30 @@ type Project struct {
 	Platform      string // CI/CD platform identifier (e.g., "gitlab", "github")
 	IsFork        bool   // true if this is a forked repository
 	DefaultBranch string // name of the default branch (e.g., "main", "master")
+	Owner         *ProjectOwner
+	Namespace     *ProjectNamespace
+	Permissions   *ProjectPermissions
+	LastActivity  time.Time
+}
+
+// ProjectOwner represents the owner of a project.
+type ProjectOwner struct {
+	Username string
+	Name     string
+	Type     string // "user" or "organization"
+}
+
+// ProjectNamespace represents the namespace/group a project belongs to.
+type ProjectNamespace struct {
+	ID   string
+	Path string
+	Kind string // "user" or "group"
+}
+
+// ProjectPermissions represents user's access level to a project.
+type ProjectPermissions struct {
+	AccessLevel int  // GitLab: 10-50 (10=Guest, 20=Reporter, 30=Developer, 40=Maintainer, 50=Owner)
+	Admin       bool // GitHub: admin permission (owner level)
+	Push        bool // GitHub: push permission
+	Pull        bool // GitHub: pull permission
 }

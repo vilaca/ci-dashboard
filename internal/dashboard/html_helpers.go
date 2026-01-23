@@ -749,22 +749,12 @@ func htmlFooter() string {
 </html>`
 }
 
-// buildNavigation returns the common navigation bar HTML.
-func buildNavigation() string {
-	return buildNavigationWithProfiles(nil)
-}
-
+// buildNavigationWithProfiles returns the common navigation bar HTML with optional user profiles.
 func buildNavigationWithProfiles(userProfiles []domain.UserProfile) string {
 	var sb strings.Builder
 
 	sb.WriteString(`<div class="nav">
 			<a href="/">Repositories</a>
-			<a href="/pipelines">Recent Pipelines</a>
-			<a href="/pipelines/failed">Failed Pipelines</a>
-			<a href="/branches">Branches</a>
-			<a href="/your-branches">Your Branches</a>
-			<a href="/mrs">Open MRs/PRs</a>
-			<a href="/issues">Open Issues</a>
 		</div>
 		<div class="action-buttons">
 			<button class="refresh-btn" onclick="location.reload()" aria-label="Refresh page">🔄 Refresh</button>

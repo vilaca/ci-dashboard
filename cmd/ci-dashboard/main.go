@@ -22,7 +22,13 @@ func main() {
 	}
 
 	// Wire up dependencies (Dependency Injection / IoC)
-	server := buildServer(cfg)
+	server, refresher := buildServer(cfg)
+
+	// Start background refresher to pre-populate and maintain cache
+	if refresher != nil {
+		refresher.Start()
+		defer refresher.Stop()
+	}
 
 	// Start server
 	addr := fmt.Sprintf(":%d", cfg.Port)
@@ -74,10 +80,10 @@ func main() {
 	}
 }
 
-// buildServer wires up all dependencies and returns the configured HTTP handler.
+// buildServer wires up all dependencies and returns the configured HTTP handler and background refresher.
 // This is the composition root where all dependencies are created and injected.
 // Follows SOLID principles and IoC (Inversion of Control).
-func buildServer(cfg *config.Config) http.Handler {
+func buildServer(cfg *config.Config) (http.Handler, *service.BackgroundRefresher) {
 	// Create shared dependencies
 	logger := dashboard.NewStdLogger()
 	renderer := dashboard.NewHTMLRenderer()
@@ -91,16 +97,19 @@ func buildServer(cfg *config.Config) http.Handler {
 		cfg.GetGitHubWatchedRepos(),
 	)
 
-	// Register CI clients based on configuration with caching
+	// Register CI clients based on configuration with stale-while-revalidate caching
 	if cfg.HasGitLabConfig() {
 		gitlabClient := gitlab.NewClient(api.ClientConfig{
 			BaseURL: cfg.GitLabURL,
 			Token:   cfg.GitLabToken,
 		}, httpClient)
 
-		// Wrap with caching layer
+		// Wrap with stale-while-revalidate caching layer
+		// TTL: how long data is considered fresh
+		// StaleTTL: how long to serve stale data (24 hours)
 		cacheDuration := time.Duration(cfg.GitLabCacheDurationSeconds) * time.Second
-		cachedGitLabClient := api.NewCachingClient(gitlabClient, cacheDuration)
+		staleTTL := 24 * time.Hour
+		cachedGitLabClient := api.NewStaleCachingClient(gitlabClient, cacheDuration, staleTTL)
 		pipelineService.RegisterClient("gitlab", cachedGitLabClient)
 	}
 
@@ -110,9 +119,10 @@ func buildServer(cfg *config.Config) http.Handler {
 			Token:   cfg.GitHubToken,
 		}, httpClient)
 
-		// Wrap with caching layer
+		// Wrap with stale-while-revalidate caching layer
 		cacheDuration := time.Duration(cfg.GitHubCacheDurationSeconds) * time.Second
-		cachedGitHubClient := api.NewCachingClient(githubClient, cacheDuration)
+		staleTTL := 24 * time.Hour
+		cachedGitHubClient := api.NewStaleCachingClient(githubClient, cacheDuration, staleTTL)
 		pipelineService.RegisterClient("github", cachedGitHubClient)
 	}
 
@@ -123,5 +133,12 @@ func buildServer(cfg *config.Config) http.Handler {
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 
-	return mux
+	// Create file cache for persistent caching
+	fileCache := service.NewFileCache("/tmp/ci-dashboard-cache.json", logger)
+
+	// Create background refresher to pre-populate and maintain cache
+	refreshInterval := 5 * time.Minute
+	refresher := service.NewBackgroundRefresher(pipelineService, fileCache, refreshInterval, logger)
+
+	return mux, refresher
 }

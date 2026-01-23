@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -75,133 +76,22 @@ func NewHandler(renderer Renderer, logger Logger, pipelineService PipelineServic
 }
 
 // RegisterRoutes registers all HTTP routes.
-// Separated from constructor to follow Single Level of Abstraction Principle (SLAP).
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/", h.handleRepositories)
 	mux.HandleFunc("/api/health", h.handleHealth)
-	mux.HandleFunc("/api/stream/repositories", h.handleStreamRepositories)
+	mux.HandleFunc("/api/repositories", h.handleRepositoriesBulk)
 	mux.HandleFunc("/api/repository-detail", h.handleRepositoryDetailAPI)
 	mux.HandleFunc("/api/avatar/", h.handleAvatar)
 	mux.HandleFunc("/repository", h.handleRepositoryDetail)
-	mux.HandleFunc("/pipelines", h.handleRecentPipelines)
-	mux.HandleFunc("/pipelines/failed", h.handleFailedPipelines)
-	mux.HandleFunc("/pipelines/grouped", h.handlePipelinesGrouped)
-	mux.HandleFunc("/pipelines/workflow", h.handleWorkflowRuns)
-	mux.HandleFunc("/branches", h.handleBranches)
-	mux.HandleFunc("/your-branches", h.handleYourBranches)
-	mux.HandleFunc("/mrs", h.handleMergeRequests)
-	mux.HandleFunc("/issues", h.handleIssues)
 }
 
 // handleIndex serves the main dashboard page.
-func (h *Handler) handleIndex(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html")
-
-	if err := h.renderer.RenderIndex(w); err != nil {
-		h.logger.Printf("failed to render index: %v", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-}
-
 // handleHealth serves the health check endpoint.
 func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	if err := h.renderer.RenderHealth(w); err != nil {
 		h.logger.Printf("failed to render health: %v", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-}
-
-// handlePipelines serves the pipelines page (HTML).
-func (h *Handler) handlePipelines(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html")
-
-	pipelines, err := h.pipelineService.GetLatestPipelines(r.Context())
-	if err != nil {
-		h.logger.Printf("failed to get pipelines: %v", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-
-	if err := h.renderer.RenderPipelines(w, pipelines); err != nil {
-		h.logger.Printf("failed to render pipelines: %v", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-}
-
-// handleFailedPipelines serves only failed pipelines.
-func (h *Handler) handleFailedPipelines(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html")
-
-	// Use GetRecentPipelines with larger limit to capture more history
-	pipelines, err := h.pipelineService.GetRecentPipelines(r.Context(), h.recentLimit*2)
-	if err != nil {
-		h.logger.Printf("failed to get pipelines: %v", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-
-	// Filter for failed pipelines only
-	var failedPipelines []domain.Pipeline
-	for _, p := range pipelines {
-		if p.Status == domain.StatusFailed {
-			failedPipelines = append(failedPipelines, p)
-		}
-	}
-
-	if err := h.renderer.RenderFailedPipelines(w, failedPipelines); err != nil {
-		h.logger.Printf("failed to render failed pipelines: %v", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-}
-
-// handlePipelinesGrouped serves pipelines grouped by workflow.
-func (h *Handler) handlePipelinesGrouped(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html")
-
-	pipelines, err := h.pipelineService.GetLatestPipelines(r.Context())
-	if err != nil {
-		h.logger.Printf("failed to get pipelines: %v", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-
-	grouped := h.pipelineService.GroupPipelinesByWorkflow(pipelines)
-
-	if err := h.renderer.RenderPipelinesGrouped(w, grouped); err != nil {
-		h.logger.Printf("failed to render grouped pipelines: %v", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-}
-
-// handleWorkflowRuns serves runs for a specific workflow.
-// Query params: ?project=owner/repo&workflow=123
-func (h *Handler) handleWorkflowRuns(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html")
-
-	projectID := r.URL.Query().Get("project")
-	workflowID := r.URL.Query().Get("workflow")
-
-	if projectID == "" || workflowID == "" {
-		http.Error(w, "Missing project or workflow parameter", http.StatusBadRequest)
-		return
-	}
-
-	pipelines, err := h.pipelineService.GetPipelinesByWorkflow(r.Context(), projectID, workflowID, 50)
-	if err != nil {
-		h.logger.Printf("failed to get workflow runs: %v", err)
-		http.Error(w, "Workflow not found", http.StatusNotFound)
-		return
-	}
-
-	if err := h.renderer.RenderPipelines(w, pipelines); err != nil {
-		h.logger.Printf("failed to render workflow runs: %v", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
@@ -240,200 +130,88 @@ func (h *Handler) handleRepositories(w http.ResponseWriter, r *http.Request) {
 
 // RepositoryDefaultBranch holds repository info with default branch details.
 type RepositoryDefaultBranch struct {
-	Project       domain.Project         `json:"Project"`
-	DefaultBranch *domain.Branch         `json:"DefaultBranch"`
-	Pipeline      *domain.Pipeline       `json:"Pipeline"`
-	BranchCount   int                    `json:"BranchCount"`
-	OpenMRCount   int                    `json:"OpenMRCount"`
-	DraftMRCount  int                    `json:"DraftMRCount"`
+	Project        domain.Project   `json:"Project"`
+	DefaultBranch  *domain.Branch   `json:"DefaultBranch"`
+	Pipeline       *domain.Pipeline `json:"Pipeline"`
+	BranchCount    int              `json:"BranchCount"`
+	OpenMRCount    int              `json:"OpenMRCount"`
+	DraftMRCount   int              `json:"DraftMRCount"`
+	ReviewingCount int              `json:"ReviewingCount"`
 }
 
-// handleStreamRepositories streams repository data via Server-Sent Events.
-// Fetches projects page-by-page and processes each page before fetching the next.
-func (h *Handler) handleStreamRepositories(w http.ResponseWriter, r *http.Request) {
-	// Set headers for SSE
-	w.Header().Set("Content-Type", "text/event-stream")
+// handleRepositoriesBulk returns repositories as paginated JSON (cache only, no API calls).
+func (h *Handler) handleRepositoriesBulk(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
 
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+	page := 1
+	limit := 50
+	if pageParam := r.URL.Query().Get("page"); pageParam != "" {
+		if p, err := strconv.Atoi(pageParam); err == nil && p > 0 {
+			page = p
+		}
+	}
+	if limitParam := r.URL.Query().Get("limit"); limitParam != "" {
+		if l, err := strconv.Atoi(limitParam); err == nil && l > 0 && l <= 10000 {
+			limit = l
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	projects, err := h.pipelineService.GetAllProjects(ctx)
+	if err != nil {
+		h.logger.Printf("[BulkAPI] ERROR: %v", err)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"repositories": []interface{}{},
+			"pagination": map[string]interface{}{
+				"page": 1, "limit": 50, "total": 0, "totalPages": 0, "hasNext": false,
+			},
+		})
 		return
 	}
 
-	// Fetch total count first
-	totalCount, err := h.pipelineService.GetTotalProjectCount(r.Context())
-	if err != nil {
-		h.logger.Printf("failed to get total project count: %v", err)
-		// Continue without total count
-		totalCount = 0
+	results := make([]RepositoryDefaultBranch, 0, len(projects))
+	for _, project := range projects {
+		results = append(results, RepositoryDefaultBranch{
+			Project:        project,
+			DefaultBranch:  nil,
+			Pipeline:       nil,
+			BranchCount:    0,
+			OpenMRCount:    0,
+			DraftMRCount:   0,
+			ReviewingCount: 0,
+		})
 	}
 
-	// Send total count event
-	if totalCount > 0 {
-		fmt.Fprintf(w, "event: total\ndata: %d\n\n", totalCount)
-		flusher.Flush()
+	startIndex := (page - 1) * limit
+	endIndex := startIndex + limit
+	if startIndex >= len(results) {
+		startIndex = len(results)
+	}
+	if endIndex > len(results) {
+		endIndex = len(results)
 	}
 
-	// Channel to collect repository data from both platforms
-	type repoResult struct {
-		data RepositoryDefaultBranch
-		err  error
-	}
-	resultChan := make(chan repoResult, 100)
+	paginatedResults := results[startIndex:endIndex]
+	totalCount := len(results)
+	totalPages := (totalCount + limit - 1) / limit
+	hasNext := page < totalPages
 
-	// WaitGroup to track when both platforms are done
-	var wg sync.WaitGroup
-
-	// Helper function to process a single project
-	processProject := func(proj domain.Project) repoResult {
-		// Get only default branch and its pipeline (optimized to reduce cache misses)
-		defaultBranch, defaultPipeline, branchCount, err := h.pipelineService.GetDefaultBranchForProject(r.Context(), proj)
-		if err != nil {
-			h.logger.Printf("failed to get default branch for %s: %v", proj.Name, err)
-		}
-
-		// Get MRs for this project
-		openMRCount := 0
-		draftMRCount := 0
-		mrs, err := h.pipelineService.GetMergeRequestsForProject(r.Context(), proj)
-		if err != nil {
-			h.logger.Printf("failed to get MRs for %s: %v", proj.Name, err)
-		} else {
-			for _, mr := range mrs {
-				if mr.State == "opened" || mr.State == "open" {
-					openMRCount++
-					if mr.IsDraft {
-						draftMRCount++
-					}
-				}
-			}
-		}
-
-		return repoResult{
-			data: RepositoryDefaultBranch{
-				Project:       proj,
-				DefaultBranch: defaultBranch,
-				Pipeline:      defaultPipeline,
-				BranchCount:   branchCount,
-				OpenMRCount:   openMRCount,
-				DraftMRCount:  draftMRCount,
-			},
-			err: nil,
-		}
+	response := map[string]interface{}{
+		"repositories": paginatedResults,
+		"pagination": map[string]interface{}{
+			"page":       page,
+			"limit":      limit,
+			"total":      totalCount,
+			"totalPages": totalPages,
+			"hasNext":    hasNext,
+		},
 	}
 
-	// Process GitLab repositories page-by-page
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		page := 1
-		for {
-			select {
-			case <-r.Context().Done():
-				return
-			default:
-			}
-
-			// Fetch one page of projects
-			projects, hasNext, err := h.pipelineService.GetProjectsPageByPlatform(r.Context(), "gitlab", page)
-			if err != nil {
-				h.logger.Printf("failed to get GitLab projects page %d: %v", page, err)
-				return
-			}
-
-			// Process each project in this page
-			for _, proj := range projects {
-				select {
-				case <-r.Context().Done():
-					return
-				default:
-				}
-
-				result := processProject(proj)
-				resultChan <- result
-			}
-
-			// Move to next page or stop
-			if !hasNext {
-				break
-			}
-			page++
-		}
-	}()
-
-	// Process GitHub repositories page-by-page
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		page := 1
-		for {
-			select {
-			case <-r.Context().Done():
-				return
-			default:
-			}
-
-			// Fetch one page of projects
-			projects, hasNext, err := h.pipelineService.GetProjectsPageByPlatform(r.Context(), "github", page)
-			if err != nil {
-				h.logger.Printf("failed to get GitHub projects page %d: %v", page, err)
-				return
-			}
-
-			// Process each project in this page
-			for _, proj := range projects {
-				select {
-				case <-r.Context().Done():
-					return
-				default:
-				}
-
-				result := processProject(proj)
-				resultChan <- result
-			}
-
-			// Move to next page or stop
-			if !hasNext {
-				break
-			}
-			page++
-		}
-	}()
-
-	// Close channel when both goroutines are done
-	go func() {
-		wg.Wait()
-		close(resultChan)
-	}()
-
-	// Stream results as they arrive from either platform
-	streamed := 0
-	for {
-		select {
-		case <-r.Context().Done():
-			return
-		case result, ok := <-resultChan:
-			if !ok {
-				// Channel closed - both platforms done
-				fmt.Fprintf(w, "event: done\ndata: complete\n\n")
-				flusher.Flush()
-				h.logger.Printf("streaming complete - sent %d repositories", streamed)
-				return
-			}
-
-			// Send as JSON
-			data, err := json.Marshal(result.data)
-			if err != nil {
-				h.logger.Printf("failed to marshal repository: %v", err)
-				continue
-			}
-
-			fmt.Fprintf(w, "event: repository\ndata: %s\n\n", string(data))
-			flusher.Flush()
-			streamed++
-		}
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		h.logger.Printf("failed to encode repositories: %v", err)
 	}
 }
 
@@ -533,100 +311,6 @@ func (h *Handler) handleRepositoryDetailAPI(w http.ResponseWriter, r *http.Reque
 	}
 	if err := json.NewEncoder(w).Encode(response); err != nil {
 		h.logger.Printf("failed to encode response: %v", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-}
-
-// handleRecentPipelines serves the recent pipelines page.
-func (h *Handler) handleRecentPipelines(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html")
-
-	pipelines, err := h.pipelineService.GetRecentPipelines(r.Context(), h.recentLimit)
-	if err != nil {
-		h.logger.Printf("failed to get recent pipelines: %v", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-
-	if err := h.renderer.RenderRecentPipelines(w, pipelines); err != nil {
-		h.logger.Printf("failed to render recent pipelines: %v", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-}
-
-
-// handleMergeRequests serves the merge requests/pull requests page.
-func (h *Handler) handleMergeRequests(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html")
-
-	mrs, err := h.pipelineService.GetAllMergeRequests(r.Context())
-	if err != nil {
-		h.logger.Printf("failed to get merge requests: %v", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-
-	if err := h.renderer.RenderMergeRequests(w, mrs); err != nil {
-		h.logger.Printf("failed to render merge requests: %v", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-}
-
-// handleIssues serves the issues page.
-func (h *Handler) handleIssues(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html")
-
-	issues, err := h.pipelineService.GetAllIssues(r.Context())
-	if err != nil {
-		h.logger.Printf("failed to get issues: %v", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-
-	if err := h.renderer.RenderIssues(w, issues); err != nil {
-		h.logger.Printf("failed to render issues: %v", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-}
-
-// handleBranches serves the branches page showing all branches.
-func (h *Handler) handleBranches(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html")
-
-	branches, err := h.pipelineService.GetBranchesWithPipelines(r.Context(), 50)
-	if err != nil {
-		h.logger.Printf("failed to get branches: %v", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-
-	if err := h.renderer.RenderBranches(w, branches); err != nil {
-		h.logger.Printf("failed to render branches: %v", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-}
-
-// handleYourBranches serves branches filtered by current user.
-func (h *Handler) handleYourBranches(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html")
-
-	branches, err := h.pipelineService.GetBranchesWithPipelines(r.Context(), 50)
-	if err != nil {
-		h.logger.Printf("failed to get branches: %v", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-
-	// Filter by current user
-	filteredBranches := h.pipelineService.FilterBranchesByAuthor(branches, h.gitlabCurrentUser, h.githubCurrentUser)
-
-	if err := h.renderer.RenderYourBranches(w, filteredBranches, h.gitlabCurrentUser, h.githubCurrentUser); err != nil {
-		h.logger.Printf("failed to render your branches: %v", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}

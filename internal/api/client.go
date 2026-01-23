@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"time"
 
 	"github.com/vilaca/ci-dashboard/internal/domain"
 )
@@ -61,6 +62,15 @@ type UserClient interface {
 
 	// GetCurrentUser returns the profile of the authenticated user.
 	GetCurrentUser(ctx context.Context) (*domain.UserProfile, error)
+}
+
+// EventsClient extends Client with event polling operations.
+// Follows Interface Segregation Principle.
+type EventsClient interface {
+	Client
+
+	// GetEvents returns events for a project since a specific time.
+	GetEvents(ctx context.Context, projectID string, since time.Time) ([]domain.Event, error)
 }
 
 // ClientConfig holds common configuration for API clients.

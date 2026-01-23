@@ -550,14 +550,49 @@ func (c *Client) getRateLimitReset(headers http.Header) time.Time {
 func (c *Client) convertProjects(ghRepos []githubRepository) []domain.Project {
 	projects := make([]domain.Project, 0, len(ghRepos))
 	for _, repo := range ghRepos {
-		projects = append(projects, domain.Project{
+		project := domain.Project{
 			ID:            repo.FullName,
 			Name:          repo.Name,
 			WebURL:        repo.HTMLURL,
 			Platform:      "github",
 			IsFork:        repo.Fork,
 			DefaultBranch: repo.DefaultBranch,
-		})
+			LastActivity:  repo.UpdatedAt,
+		}
+
+		project.Owner = &domain.ProjectOwner{
+			Username: repo.Owner.Login,
+			Name:     repo.Owner.Name,
+			Type:     repo.Owner.Type,
+		}
+
+		parts := strings.Split(repo.FullName, "/")
+		if len(parts) == 2 {
+			project.Namespace = &domain.ProjectNamespace{
+				ID:   parts[0],
+				Path: parts[0],
+				Kind: strings.ToLower(repo.Owner.Type),
+			}
+		}
+
+		if repo.Permissions != nil {
+			accessLevel := 10
+			if repo.Permissions.Push {
+				accessLevel = 30
+			}
+			if repo.Permissions.Admin {
+				accessLevel = 50
+			}
+
+			project.Permissions = &domain.ProjectPermissions{
+				AccessLevel: accessLevel,
+				Admin:       repo.Permissions.Admin,
+				Push:        repo.Permissions.Push,
+				Pull:        repo.Permissions.Pull,
+			}
+		}
+
+		projects = append(projects, project)
 	}
 	return projects
 }
@@ -650,12 +685,22 @@ func (c *Client) convertBranch(ghb githubBranch, projectID string, commit *githu
 
 // GitHub API response types
 type githubRepository struct {
-	ID            int    `json:"id"`
-	Name          string `json:"name"`
-	FullName      string `json:"full_name"`
-	HTMLURL       string `json:"html_url"`
-	DefaultBranch string `json:"default_branch"`
-	Fork          bool   `json:"fork"`
+	ID            int                  `json:"id"`
+	Name          string               `json:"name"`
+	FullName      string               `json:"full_name"`
+	HTMLURL       string               `json:"html_url"`
+	DefaultBranch string               `json:"default_branch"`
+	Fork          bool                 `json:"fork"`
+	Owner         githubUser           `json:"owner"`
+	Permissions   *githubPermissions   `json:"permissions"`
+	UpdatedAt     time.Time            `json:"updated_at"`
+}
+
+type githubPermissions struct {
+	Admin    bool `json:"admin"`
+	Maintain bool `json:"maintain"`
+	Push     bool `json:"push"`
+	Pull     bool `json:"pull"`
 }
 
 type githubWorkflowRunsResponse struct {
@@ -882,6 +927,7 @@ type githubRef struct {
 type githubUser struct {
 	Login     string `json:"login"`
 	Name      string `json:"name"`
+	Type      string `json:"type"`
 	AvatarURL string `json:"avatar_url"`
 	HTMLURL   string `json:"html_url"`
 }

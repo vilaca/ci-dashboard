@@ -38,6 +38,59 @@ func (s *PipelineService) RegisterClient(platform string, client api.Client) {
 	s.clients[platform] = client
 }
 
+// ForceRefreshAllCaches forces all clients to fetch fresh data and populate their caches.
+// This is used by the background refresher to initially populate caches.
+func (s *PipelineService) ForceRefreshAllCaches(ctx context.Context) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	// Define cache keys that need to be force-refreshed
+	keysToRefresh := []string{
+		"GetProjects",
+		"GetProjectCount",
+	}
+
+	var errChan = make(chan error, len(s.clients)*len(keysToRefresh))
+	var wg sync.WaitGroup
+
+	for platform, client := range s.clients {
+		// Check if client supports force refresh
+		type forceRefresher interface {
+			ForceRefresh(ctx context.Context, key string) error
+		}
+
+		refresher, ok := client.(forceRefresher)
+		if !ok {
+			continue
+		}
+
+		for _, key := range keysToRefresh {
+			wg.Add(1)
+			go func(p, k string, r forceRefresher) {
+				defer wg.Done()
+				if err := r.ForceRefresh(ctx, k); err != nil {
+					errChan <- fmt.Errorf("%s ForceRefresh(%s): %w", p, k, err)
+				}
+			}(platform, key, refresher)
+		}
+	}
+
+	wg.Wait()
+	close(errChan)
+
+	// Collect errors
+	var errs []error
+	for err := range errChan {
+		errs = append(errs, err)
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("force refresh errors: %v", errs)
+	}
+
+	return nil
+}
+
 // getClientForPlatform returns the appropriate client for a given platform.
 // Returns nil if no client is registered for the platform.
 func (s *PipelineService) getClientForPlatform(platform string) api.Client {
@@ -701,6 +754,11 @@ func (s *PipelineService) GetUserProfiles(ctx context.Context) ([]domain.UserPro
 			if err != nil {
 				// Log error but don't fail the whole operation
 				fmt.Printf("Failed to get user profile for %s: %v\n", p, err)
+				return
+			}
+
+			// Check if profile is nil (cache miss in stale cache)
+			if profile == nil {
 				return
 			}
 

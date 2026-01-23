@@ -374,14 +374,49 @@ func (c *Client) doRequest(ctx context.Context, url string, result interface{}) 
 func (c *Client) convertProjects(glProjects []gitlabProject) []domain.Project {
 	projects := make([]domain.Project, len(glProjects))
 	for i, glp := range glProjects {
-		projects[i] = domain.Project{
+		project := domain.Project{
 			ID:            fmt.Sprintf("%d", glp.ID),
 			Name:          glp.Name,
 			WebURL:        glp.WebURL,
 			Platform:      "gitlab",
 			IsFork:        glp.ForkedFromProject != nil,
 			DefaultBranch: glp.DefaultBranch,
+			LastActivity:  glp.LastActivityAt,
 		}
+
+		if glp.Owner != nil {
+			project.Owner = &domain.ProjectOwner{
+				Username: glp.Owner.Username,
+				Name:     glp.Owner.Name,
+				Type:     "user",
+			}
+		}
+
+		if glp.Namespace != nil {
+			project.Namespace = &domain.ProjectNamespace{
+				ID:   fmt.Sprintf("%d", glp.Namespace.ID),
+				Path: glp.Namespace.Path,
+				Kind: glp.Namespace.Kind,
+			}
+		}
+
+		if glp.Permissions != nil {
+			accessLevel := 0
+			if glp.Permissions.ProjectAccess != nil {
+				accessLevel = glp.Permissions.ProjectAccess.AccessLevel
+			} else if glp.Permissions.GroupAccess != nil {
+				accessLevel = glp.Permissions.GroupAccess.AccessLevel
+			}
+
+			project.Permissions = &domain.ProjectPermissions{
+				AccessLevel: accessLevel,
+				Admin:       accessLevel >= 50,
+				Push:        accessLevel >= 30,
+				Pull:        accessLevel >= 10,
+			}
+		}
+
+		projects[i] = project
 	}
 	return projects
 }
@@ -443,16 +478,35 @@ func convertStatus(glStatus string) domain.Status {
 
 // GitLab API response types
 type gitlabProject struct {
-	ID                int                `json:"id"`
-	Name              string             `json:"name"`
-	WebURL            string             `json:"web_url"`
-	DefaultBranch     string             `json:"default_branch"`
-	ForkedFromProject *gitlabProjectRef  `json:"forked_from_project,omitempty"`
+	ID                int                  `json:"id"`
+	Name              string               `json:"name"`
+	WebURL            string               `json:"web_url"`
+	DefaultBranch     string               `json:"default_branch"`
+	ForkedFromProject *gitlabProjectRef    `json:"forked_from_project,omitempty"`
+	Owner             *gitlabUser          `json:"owner"`
+	Namespace         *gitlabNamespace     `json:"namespace"`
+	Permissions       *gitlabPermissions   `json:"permissions"`
+	LastActivityAt    time.Time            `json:"last_activity_at"`
 }
 
 type gitlabProjectRef struct {
 	ID   int    `json:"id"`
 	Name string `json:"name"`
+}
+
+type gitlabNamespace struct {
+	ID   int    `json:"id"`
+	Path string `json:"path"`
+	Kind string `json:"kind"`
+}
+
+type gitlabPermissions struct {
+	ProjectAccess *gitlabAccessLevel `json:"project_access"`
+	GroupAccess   *gitlabAccessLevel `json:"group_access"`
+}
+
+type gitlabAccessLevel struct {
+	AccessLevel int `json:"access_level"`
 }
 
 type gitlabPipeline struct {
