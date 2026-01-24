@@ -319,7 +319,6 @@ func (c *Client) GetBranches(ctx context.Context, projectID string, limit int) (
 					log.Printf("[GitHub] Failed to get commit details for %s/%s (URL: %s): %v", projectID, ghb.Name, commitURL, err)
 					branches[i] = c.convertBranch(ghb, projectID, nil, isDefault)
 				} else {
-					log.Printf("[GitHub] Got commit details for %s/%s: author=%s, date=%s", projectID, ghb.Name, commitDetails.Commit.Author.Name, commitDetails.Commit.Author.Date)
 					branches[i] = c.convertBranch(ghb, projectID, &commitDetails, isDefault)
 				}
 			} else {

@@ -62,16 +62,21 @@ func (s *PipelineService) ForceRefreshAllCaches(ctx context.Context) error {
 	wg.Wait()
 	close(errChan)
 
-	// Collect errors
+	// Collect and log errors, but don't fail if some platforms succeed
 	var errs []error
+	successCount := len(s.clients)
 	for err := range errChan {
 		errs = append(errs, err)
+		successCount--
+		fmt.Printf("Force refresh error: %v\n", err)
 	}
 
-	if len(errs) > 0 {
-		return fmt.Errorf("force refresh errors: %v", errs)
+	// Only fail if ALL platforms failed
+	if len(errs) > 0 && successCount == 0 {
+		return fmt.Errorf("all platforms failed: %v", errs)
 	}
 
+	// Some platforms succeeded, consider it a success
 	return nil
 }
 
@@ -95,6 +100,13 @@ func (s *PipelineService) forceRefreshClientPageByPage(ctx context.Context, plat
 	var allProjects []domain.Project
 
 	for {
+		// Check if context has been cancelled (timeout or shutdown)
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("refresh cancelled: %w", ctx.Err())
+		default:
+		}
+
 		// Fetch one page of projects
 		projects, hasNext, err := cacher.GetProjectsPage(ctx, page)
 		if err != nil {

@@ -100,15 +100,18 @@ func (r *BackgroundRefresher) refreshLoop() {
 // refreshData fetches all key data to warm up caches.
 // This triggers force-fetch on all clients to populate their stale caches.
 func (r *BackgroundRefresher) refreshData() {
-	ctx := context.Background()
+	// Add timeout to prevent indefinite blocking on rate limits
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
 	startTime := time.Now()
 
 	// Force refresh all client caches
 	// This bypasses the cache-only reads and actually fetches from APIs
 	r.logger.Printf("Background refresher: Force-refreshing all client caches...")
 	if err := r.pipelineService.ForceRefreshAllCaches(ctx); err != nil {
-		r.logger.Printf("Background refresher: Failed to force-refresh caches: %v", err)
-		return
+		r.logger.Printf("Background refresher: Failed to force-refresh caches: %v (continuing with stale data)", err)
+		// Don't return - continue to serve stale cached data
 	}
 
 	// Now fetch projects (will come from freshly populated cache)
