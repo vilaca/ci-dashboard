@@ -32,6 +32,44 @@ func NewPipelineService(gitlabWhitelist, githubWhitelist []string) *PipelineServ
 	}
 }
 
+// Helper functions to fix repository names (convert project ID to project name)
+
+// fixBranchRepositoryNames updates branch repository names from project ID to project name.
+func fixBranchRepositoryNames(branches []domain.Branch, project domain.Project) {
+	for i := range branches {
+		if branches[i].Repository == project.ID {
+			branches[i].Repository = project.Name
+		}
+	}
+}
+
+// fixPipelineRepositoryNames updates pipeline repository names from project ID to project name.
+func fixPipelineRepositoryNames(pipelines []domain.Pipeline, project domain.Project) {
+	for i := range pipelines {
+		if pipelines[i].Repository == "" || pipelines[i].Repository == project.ID {
+			pipelines[i].Repository = project.Name
+		}
+	}
+}
+
+// fixMRRepositoryNames updates merge request repository names from title/ID to project name.
+func fixMRRepositoryNames(mrs []domain.MergeRequest, project domain.Project) {
+	for i := range mrs {
+		if mrs[i].Repository == "" || mrs[i].Repository == mrs[i].Title {
+			mrs[i].Repository = project.Name
+		}
+	}
+}
+
+// fixIssueRepositoryNames updates issue repository names from title/ID to project name.
+func fixIssueRepositoryNames(issues []domain.Issue, project domain.Project) {
+	for i := range issues {
+		if issues[i].Repository == "" || issues[i].Repository == issues[i].Title {
+			issues[i].Repository = project.Name
+		}
+	}
+}
+
 // RegisterClient registers a CI/CD platform client.
 // Follows Open/Closed Principle - can add new platforms without modifying service.
 func (s *PipelineService) RegisterClient(platform string, client api.Client) {
@@ -288,11 +326,7 @@ func (s *PipelineService) GetBranchesForProject(ctx context.Context, project dom
 	}
 
 	// Fill in repository name
-	for i := range branches {
-		if branches[i].Repository == project.ID {
-			branches[i].Repository = project.Name
-		}
-	}
+	fixBranchRepositoryNames(branches, project)
 
 	// Get pipeline for each branch
 	var results []domain.BranchWithPipeline
@@ -330,14 +364,13 @@ func (s *PipelineService) GetDefaultBranchForProject(ctx context.Context, projec
 		return nil, nil, 0, err
 	}
 
+	// Fix repository names for all branches
+	fixBranchRepositoryNames(branches, project)
+
 	// Find default branch
 	var defaultBranch *domain.Branch
 	for i := range branches {
 		if branches[i].IsDefault {
-			// Fix repository name
-			if branches[i].Repository == project.ID {
-				branches[i].Repository = project.Name
-			}
 			defaultBranch = &branches[i]
 			break
 		}
@@ -637,11 +670,7 @@ func (s *PipelineService) GetRepositoriesWithRecentRuns(ctx context.Context, run
 				pipelines, err := client.GetPipelines(ctx, proj.ID, runsPerRepo)
 				if err == nil && len(pipelines) > 0 {
 					// Fill in repository name from project
-					for i := range pipelines {
-						if pipelines[i].Repository == "" || pipelines[i].Repository == proj.ID {
-							pipelines[i].Repository = proj.Name
-						}
-					}
+					fixPipelineRepositoryNames(pipelines, proj)
 					runs = pipelines
 				}
 			}
@@ -714,11 +743,7 @@ func (s *PipelineService) GetRecentPipelines(ctx context.Context, totalLimit int
 				pipelines, err := client.GetPipelines(ctx, proj.ID, pipelinesPerProject)
 				if err == nil && len(pipelines) > 0 {
 					// Fill in repository name from project
-					for i := range pipelines {
-						if pipelines[i].Repository == "" || pipelines[i].Repository == proj.ID {
-							pipelines[i].Repository = proj.Name
-						}
-					}
+					fixPipelineRepositoryNames(pipelines, proj)
 
 					mu.Lock()
 					allPipelines = append(allPipelines, pipelines...)
@@ -789,11 +814,7 @@ func (s *PipelineService) GetAllMergeRequests(ctx context.Context) ([]domain.Mer
 			}
 
 			// Set repository name from project
-			for i := range mrs {
-				if mrs[i].Repository == "" || mrs[i].Repository == mrs[i].Title {
-					mrs[i].Repository = proj.Name
-				}
-			}
+			fixMRRepositoryNames(mrs, proj)
 
 			results <- result{mrs: mrs, err: nil}
 		}(project)
@@ -847,11 +868,7 @@ func (s *PipelineService) GetMergeRequestsForProject(ctx context.Context, projec
 	}
 
 	// Set repository name from project
-	for i := range mrs {
-		if mrs[i].Repository == "" || mrs[i].Repository == mrs[i].Title {
-			mrs[i].Repository = project.Name
-		}
-	}
+	fixMRRepositoryNames(mrs, project)
 
 	return mrs, nil
 }
@@ -946,11 +963,7 @@ func (s *PipelineService) GetAllIssues(ctx context.Context) ([]domain.Issue, err
 			}
 
 			// Set repository name from project
-			for i := range issues {
-				if issues[i].Repository == "" || issues[i].Repository == issues[i].Title {
-					issues[i].Repository = proj.Name
-				}
-			}
+			fixIssueRepositoryNames(issues, proj)
 
 			results <- result{issues: issues, err: nil}
 		}(project)
@@ -1012,11 +1025,7 @@ func (s *PipelineService) GetAllBranches(ctx context.Context, limit int) ([]doma
 				branches, err := client.GetBranches(ctx, proj.ID, limit)
 				if err == nil && len(branches) > 0 {
 					// Fill in repository name from project
-					for i := range branches {
-						if branches[i].Repository == proj.ID {
-							branches[i].Repository = proj.Name
-						}
-					}
+					fixBranchRepositoryNames(branches, proj)
 					results <- result{branches: branches, err: nil}
 					return
 				}

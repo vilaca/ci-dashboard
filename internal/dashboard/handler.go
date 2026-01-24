@@ -22,12 +22,15 @@ const (
 	AvatarCacheTTL = 24 * time.Hour
 	// AvatarCleanupInterval is how often expired avatars are removed from cache
 	AvatarCleanupInterval = 1 * time.Hour
+	// MaxAvatarCacheSize is the maximum number of avatars to cache
+	MaxAvatarCacheSize = 1000
 )
 
-// avatarCacheEntry stores avatar data with expiration time
+// avatarCacheEntry stores avatar data with expiration time and LRU tracking
 type avatarCacheEntry struct {
-	data      []byte
-	expiresAt time.Time
+	data           []byte
+	expiresAt      time.Time
+	lastAccessTime time.Time
 }
 
 // Handler handles HTTP requests for the dashboard.
@@ -487,7 +490,8 @@ func (h *Handler) handleAvatar(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check if expired
-	if time.Now().After(entry.expiresAt) {
+	now := time.Now()
+	if now.After(entry.expiresAt) {
 		// Expired - remove from cache and return 404
 		h.avatarCacheMu.Lock()
 		delete(h.avatarCache, cacheKey)
@@ -495,6 +499,13 @@ func (h *Handler) handleAvatar(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Avatar expired", http.StatusNotFound)
 		return
 	}
+
+	// Update last access time for LRU tracking
+	h.avatarCacheMu.Lock()
+	if entry := h.avatarCache[cacheKey]; entry != nil {
+		entry.lastAccessTime = now
+	}
+	h.avatarCacheMu.Unlock()
 
 	imageData := entry.data
 
@@ -587,13 +598,46 @@ func (h *Handler) cacheAvatar(platform, username, email, avatarURL string) {
 
 	// Store in cache with 24 hour TTL
 	h.avatarCacheMu.Lock()
+
+	// Evict oldest entry if cache is full
+	if len(h.avatarCache) >= MaxAvatarCacheSize {
+		h.evictOldestAvatarLocked()
+	}
+
+	now := time.Now()
 	h.avatarCache[cacheKey] = &avatarCacheEntry{
-		data:      imageData,
-		expiresAt: time.Now().Add(AvatarCacheTTL),
+		data:           imageData,
+		expiresAt:      now.Add(AvatarCacheTTL),
+		lastAccessTime: now,
 	}
 	h.avatarCacheMu.Unlock()
 
 	h.logger.Printf("cached avatar for %s (%s)", username, platform)
+}
+
+// evictOldestAvatarLocked removes the least recently accessed avatar from cache.
+// Assumes caller holds h.avatarCacheMu lock (write lock).
+func (h *Handler) evictOldestAvatarLocked() {
+	if len(h.avatarCache) == 0 {
+		return
+	}
+
+	var oldestKey string
+	var oldestTime time.Time
+	first := true
+
+	for key, entry := range h.avatarCache {
+		if first || entry.lastAccessTime.Before(oldestTime) {
+			oldestKey = key
+			oldestTime = entry.lastAccessTime
+			first = false
+		}
+	}
+
+	if oldestKey != "" {
+		delete(h.avatarCache, oldestKey)
+		h.logger.Printf("evicted oldest avatar from cache: %s", oldestKey)
+	}
 }
 
 // cleanupAvatarCache periodically removes expired entries from avatar cache

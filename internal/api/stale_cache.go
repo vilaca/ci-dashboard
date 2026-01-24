@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"log"
 	"runtime"
+	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -144,14 +146,10 @@ func (c *StaleCache) GetExpiredKeys() []string {
 		}
 	}
 
-	// Sort by last commit (most recent first) - simple bubble sort
-	for i := 0; i < len(expired)-1; i++ {
-		for j := 0; j < len(expired)-i-1; j++ {
-			if expired[j].lastCommit.Before(expired[j+1].lastCommit) {
-				expired[j], expired[j+1] = expired[j+1], expired[j]
-			}
-		}
-	}
+	// Sort by last commit (most recent first)
+	sort.Slice(expired, func(i, j int) bool {
+		return expired[i].lastCommit.After(expired[j].lastCommit)
+	})
 
 	// Extract just the keys
 	keys := make([]string, len(expired))
@@ -241,38 +239,31 @@ func NewStaleCachingClient(client Client, ttl, staleTTL time.Duration) *StaleCac
 	}
 }
 
+// getCached is a generic helper for retrieving typed values from cache.
+// Returns the cached value and true if found and correctly typed, or defaultValue and false otherwise.
+func getCached[T any](cache *StaleCache, key string, defaultValue T) (T, bool) {
+	if cached, _, found := cache.Get(key); found {
+		if value, ok := cached.(T); ok {
+			return value, true
+		}
+		// Type mismatch - log and return default
+		log.Printf("[Cache] Type mismatch for key %s", key)
+	}
+	return defaultValue, false
+}
+
 // GetProjects retrieves projects with stale-while-revalidate caching.
 func (c *StaleCachingClient) GetProjects(ctx context.Context) ([]domain.Project, error) {
 	key := "GetProjects"
-
-	// Try cache first (even if stale)
-	if cached, _, found := c.cache.Get(key); found {
-		if projects, ok := cached.([]domain.Project); ok {
-			return projects, nil
-		}
-		// Type assertion failed - cache corrupted, return empty
-		return []domain.Project{}, fmt.Errorf("cache type mismatch for key %s", key)
-	}
-
-	// Cache miss - return empty (background will populate)
-	return []domain.Project{}, nil
+	projects, _ := getCached(c.cache, key, []domain.Project{})
+	return projects, nil
 }
 
 // GetLatestPipeline retrieves the latest pipeline with stale-while-revalidate caching.
 func (c *StaleCachingClient) GetLatestPipeline(ctx context.Context, projectID, branch string) (*domain.Pipeline, error) {
 	key := fmt.Sprintf("GetLatestPipeline:%s:%s", projectID, branch)
-
-	// Try cache first (even if stale)
-	if cached, _, found := c.cache.Get(key); found {
-		if pipeline, ok := cached.(*domain.Pipeline); ok {
-			return pipeline, nil
-		}
-		// Type assertion failed - cache corrupted, return nil
-		return nil, fmt.Errorf("cache type mismatch for key %s", key)
-	}
-
-	// Cache miss - return nil (background will populate)
-	return nil, nil
+	pipeline, _ := getCached(c.cache, key, (*domain.Pipeline)(nil))
+	return pipeline, nil
 }
 
 // Implement other Client methods...
@@ -282,47 +273,20 @@ func (c *StaleCachingClient) GetProjectsPage(ctx context.Context, page int) ([]d
 
 func (c *StaleCachingClient) GetProjectCount(ctx context.Context) (int, error) {
 	key := "GetProjectCount"
-
-	if cached, _, found := c.cache.Get(key); found {
-		if count, ok := cached.(int); ok {
-			return count, nil
-		}
-		// Type assertion failed - cache corrupted, return 0
-		return 0, fmt.Errorf("cache type mismatch for key %s", key)
-	}
-
-	// Cache miss - return 0 (background will populate)
-	return 0, nil
+	count, _ := getCached(c.cache, key, 0)
+	return count, nil
 }
 
 func (c *StaleCachingClient) GetPipelines(ctx context.Context, projectID string, limit int) ([]domain.Pipeline, error) {
 	key := fmt.Sprintf("GetPipelines:%s:%d", projectID, limit)
-
-	if cached, _, found := c.cache.Get(key); found {
-		if pipelines, ok := cached.([]domain.Pipeline); ok {
-			return pipelines, nil
-		}
-		// Type assertion failed - cache corrupted, return empty
-		return []domain.Pipeline{}, fmt.Errorf("cache type mismatch for key %s", key)
-	}
-
-	// Cache miss - return empty (background will populate)
-	return []domain.Pipeline{}, nil
+	pipelines, _ := getCached(c.cache, key, []domain.Pipeline{})
+	return pipelines, nil
 }
 
 func (c *StaleCachingClient) GetBranches(ctx context.Context, projectID string, limit int) ([]domain.Branch, error) {
 	key := fmt.Sprintf("GetBranches:%s:%d", projectID, limit)
-
-	if cached, _, found := c.cache.Get(key); found {
-		if branches, ok := cached.([]domain.Branch); ok {
-			return branches, nil
-		}
-		// Type assertion failed - cache corrupted, return empty
-		return []domain.Branch{}, fmt.Errorf("cache type mismatch for key %s", key)
-	}
-
-	// Cache miss - return empty (background will populate)
-	return []domain.Branch{}, nil
+	branches, _ := getCached(c.cache, key, []domain.Branch{})
+	return branches, nil
 }
 
 // GetMergeRequests with caching
@@ -332,17 +296,8 @@ func (c *StaleCachingClient) GetMergeRequests(ctx context.Context, projectID str
 	}
 
 	key := fmt.Sprintf("GetMergeRequests:%s", projectID)
-
-	if cached, _, found := c.cache.Get(key); found {
-		if mrs, ok := cached.([]domain.MergeRequest); ok {
-			return mrs, nil
-		}
-		// Type assertion failed - cache corrupted, return empty
-		return []domain.MergeRequest{}, fmt.Errorf("cache type mismatch for key %s", key)
-	}
-
-	// Cache miss - return empty (background will populate)
-	return []domain.MergeRequest{}, nil
+	mrs, _ := getCached(c.cache, key, []domain.MergeRequest{})
+	return mrs, nil
 }
 
 // GetIssues with caching
@@ -352,17 +307,8 @@ func (c *StaleCachingClient) GetIssues(ctx context.Context, projectID string) ([
 	}
 
 	key := fmt.Sprintf("GetIssues:%s", projectID)
-
-	if cached, _, found := c.cache.Get(key); found {
-		if issues, ok := cached.([]domain.Issue); ok {
-			return issues, nil
-		}
-		// Type assertion failed - cache corrupted, return empty
-		return []domain.Issue{}, fmt.Errorf("cache type mismatch for key %s", key)
-	}
-
-	// Cache miss - return empty (background will populate)
-	return []domain.Issue{}, nil
+	issues, _ := getCached(c.cache, key, []domain.Issue{})
+	return issues, nil
 }
 
 // GetCurrentUser with caching
@@ -372,17 +318,8 @@ func (c *StaleCachingClient) GetCurrentUser(ctx context.Context) (*domain.UserPr
 	}
 
 	key := "GetCurrentUser"
-
-	if cached, _, found := c.cache.Get(key); found {
-		if user, ok := cached.(*domain.UserProfile); ok {
-			return user, nil
-		}
-		// Type assertion failed - cache corrupted, return nil
-		return nil, fmt.Errorf("cache type mismatch for key %s", key)
-	}
-
-	// Cache miss - return nil (background will populate)
-	return nil, nil
+	user, _ := getCached(c.cache, key, (*domain.UserProfile)(nil))
+	return user, nil
 }
 
 // GetEvents retrieves recent events (NOT cached - always fresh for event polling).
@@ -538,19 +475,7 @@ func (c *StaleCachingClient) InvalidatePattern(pattern string) int {
 // ForceRefresh immediately fetches and caches data for a specific key.
 // Used by event poller to populate cache after invalidation.
 func (c *StaleCachingClient) ForceRefresh(ctx context.Context, key string) error {
-	parts := []string{}
-	current := ""
-	for _, ch := range key {
-		if ch == ':' {
-			parts = append(parts, current)
-			current = ""
-		} else {
-			current += string(ch)
-		}
-	}
-	if current != "" {
-		parts = append(parts, current)
-	}
+	parts := strings.Split(key, ":")
 
 	if len(parts) == 0 {
 		return fmt.Errorf("invalid cache key: %s", key)

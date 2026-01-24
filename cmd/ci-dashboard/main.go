@@ -15,6 +15,7 @@ import (
 	"github.com/vilaca/ci-dashboard/internal/api/gitlab"
 	"github.com/vilaca/ci-dashboard/internal/config"
 	"github.com/vilaca/ci-dashboard/internal/dashboard"
+	"github.com/vilaca/ci-dashboard/internal/domain"
 	"github.com/vilaca/ci-dashboard/internal/service"
 )
 
@@ -150,7 +151,7 @@ func buildServer(cfg *config.Config) (http.Handler, *dashboard.Handler, *service
 		cacheDuration := time.Duration(cfg.GitLabCacheDurationSeconds) * time.Second
 		staleTTL := time.Duration(cfg.StaleCacheTTLSeconds) * time.Second
 		cachedGitLabClient := api.NewStaleCachingClient(gitlabClient, cacheDuration, staleTTL)
-		pipelineService.RegisterClient("gitlab", cachedGitLabClient)
+		pipelineService.RegisterClient(domain.PlatformGitLab, cachedGitLabClient)
 	}
 
 	if cfg.HasGitHubConfig() {
@@ -163,7 +164,7 @@ func buildServer(cfg *config.Config) (http.Handler, *dashboard.Handler, *service
 		cacheDuration := time.Duration(cfg.GitHubCacheDurationSeconds) * time.Second
 		staleTTL := time.Duration(cfg.StaleCacheTTLSeconds) * time.Second
 		cachedGitHubClient := api.NewStaleCachingClient(githubClient, cacheDuration, staleTTL)
-		pipelineService.RegisterClient("github", cachedGitHubClient)
+		pipelineService.RegisterClient(domain.PlatformGitHub, cachedGitHubClient)
 	}
 
 	// Create handler with dependencies (Dependency Injection)
