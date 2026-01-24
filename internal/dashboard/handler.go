@@ -24,6 +24,13 @@ const (
 	AvatarCleanupInterval = 1 * time.Hour
 	// MaxAvatarCacheSize is the maximum number of avatars to cache
 	MaxAvatarCacheSize = 1000
+
+	// HTTPRequestTimeout is the timeout for HTTP requests to external services
+	HTTPRequestTimeout = 30 * time.Second
+	// AvatarDownloadTimeout is the timeout for downloading avatar images
+	AvatarDownloadTimeout = 10 * time.Second
+	// MaxHTTPRedirects is the maximum number of HTTP redirects to follow
+	MaxHTTPRedirects = 10
 )
 
 // avatarCacheEntry stores avatar data with expiration time and LRU tracking
@@ -44,6 +51,7 @@ type Handler struct {
 	uiRefreshInterval   int
 	gitlabCurrentUser   string
 	githubCurrentUser   string
+	httpClient          *http.Client // reused HTTP client for avatar downloads
 	avatarCache         map[string]*avatarCacheEntry // platform:username -> cached data with TTL
 	avatarCacheMu       sync.RWMutex
 	stopAvatarCleanup   chan struct{} // channel to stop avatar cache cleanup goroutine
@@ -103,6 +111,15 @@ func NewHandler(cfg HandlerConfig) *Handler {
 		uiRefreshInterval: cfg.UIRefreshInterval,
 		gitlabCurrentUser: cfg.GitLabUser,
 		githubCurrentUser: cfg.GitHubUser,
+		httpClient: &http.Client{
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				// Follow redirects but limit to prevent infinite loops
+				if len(via) >= MaxHTTPRedirects {
+					return fmt.Errorf("too many redirects")
+				}
+				return nil
+			},
+		},
 		avatarCache:       make(map[string]*avatarCacheEntry),
 		stopAvatarCleanup: make(chan struct{}),
 	}
@@ -200,7 +217,7 @@ func (h *Handler) handleRepositoriesBulk(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), HTTPRequestTimeout)
 	defer cancel()
 
 	projects, err := h.pipelineService.GetAllProjects(ctx)
@@ -546,7 +563,7 @@ func (h *Handler) cacheAvatar(platform, username, email, avatarURL string) {
 	}
 
 	// GitLab /uploads/ URLs require web session authentication - use Gravatar fallback
-	if platform == "gitlab" && strings.Contains(avatarURL, "/uploads/") {
+	if platform == domain.PlatformGitLab && strings.Contains(avatarURL, "/uploads/") {
 		if email == "" {
 			h.logger.Printf("skipping gitlab uploaded avatar for %s (no email for Gravatar fallback)", username)
 			return
@@ -556,7 +573,7 @@ func (h *Handler) cacheAvatar(platform, username, email, avatarURL string) {
 	}
 
 	// Download avatar
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), AvatarDownloadTimeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, avatarURL, nil)
@@ -568,16 +585,7 @@ func (h *Handler) cacheAvatar(platform, username, email, avatarURL string) {
 	// GitHub avatars are public CDN URLs, no auth needed
 	// GitLab Gravatar URLs are also public, no auth needed
 
-	client := &http.Client{
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			// Follow redirects but limit to 10
-			if len(via) >= 10 {
-				return fmt.Errorf("too many redirects")
-			}
-			return nil
-		},
-	}
-	resp, err := client.Do(req)
+	resp, err := h.httpClient.Do(req)
 	if err != nil {
 		h.logger.Printf("failed to fetch avatar for %s: %v", username, err)
 		return

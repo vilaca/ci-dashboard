@@ -76,9 +76,9 @@ func (r *BackgroundRefresher) Stop() {
 func (r *BackgroundRefresher) refreshLoop() {
 	defer r.wg.Done()
 
-	// Perform initial fetch after 2 seconds (allows server to fully start)
+	// Perform initial fetch after delay (allows server to fully start)
 	// This runs in background, not blocking the server
-	time.Sleep(2 * time.Second)
+	time.Sleep(InitialRefreshDelay)
 	r.logger.Printf("Background refresher: Performing initial background fetch...")
 	r.refreshData()
 
@@ -101,7 +101,7 @@ func (r *BackgroundRefresher) refreshLoop() {
 // This triggers force-fetch on all clients to populate their stale caches.
 func (r *BackgroundRefresher) refreshData() {
 	// Add timeout to prevent indefinite blocking on rate limits
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), RefreshOperationTimeout)
 	defer cancel()
 
 	startTime := time.Now()

@@ -13,60 +13,23 @@ import (
 	"github.com/vilaca/ci-dashboard/internal/domain"
 )
 
-const (
-	// MaxConcurrentRequests limits concurrent API requests to avoid overwhelming the API
-	MaxConcurrentRequests = 5
-	// MaxRetryAttempts is the maximum number of retry attempts for failed requests
-	MaxRetryAttempts = 3
-	// DefaultPageSize is the default number of items per page
-	DefaultPageSize = 100
-)
-
 // Client implements api.Client for GitLab.
 // Follows Single Responsibility Principle - only handles GitLab API communication.
 type Client struct {
-	baseURL    string
-	token      string
-	httpClient HTTPClient
-
-	// Rate limiting
-	semaphore chan struct{} // Limits concurrent requests
-}
-
-// HTTPClient interface for HTTP operations (allows mocking in tests).
-// Follows Interface Segregation Principle.
-type HTTPClient interface {
-	Do(req *http.Request) (*http.Response, error)
+	*api.BaseClient
 }
 
 // NewClient creates a new GitLab client.
 // Uses dependency injection for HTTPClient (IoC).
-func NewClient(config api.ClientConfig, httpClient HTTPClient) *Client {
+func NewClient(config api.ClientConfig, httpClient api.HTTPClient) *Client {
 	return &Client{
-		baseURL:    config.BaseURL,
-		token:      config.Token,
-		httpClient: httpClient,
-		semaphore:  make(chan struct{}, MaxConcurrentRequests),
+		BaseClient: api.NewBaseClient(config.BaseURL, config.Token, httpClient),
 	}
-}
-
-// doRateLimited performs an HTTP request with rate limiting via semaphore.
-func (c *Client) doRateLimited(ctx context.Context, fn func() (interface{}, error)) (interface{}, error) {
-	// Acquire semaphore (rate limiting)
-	select {
-	case c.semaphore <- struct{}{}:
-		defer func() { <-c.semaphore }()
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-
-	// Execute the request
-	return fn()
 }
 
 // GetProjects retrieves all projects from GitLab.
 func (c *Client) GetProjects(ctx context.Context) ([]domain.Project, error) {
-	result, err := c.doRateLimited(ctx, func() (interface{}, error) {
+	result, err := c.DoRateLimited(ctx, func() (interface{}, error) {
 		// Fetch all accessible projects page by page
 		// This works better with organization/group-based access
 		var allProjects []domain.Project
@@ -100,17 +63,17 @@ func (c *Client) GetProjects(ctx context.Context) ([]domain.Project, error) {
 // GetProjectCount returns the total number of projects.
 func (c *Client) GetProjectCount(ctx context.Context) (int, error) {
 	// Make a lightweight request to get count from headers
-	url := fmt.Sprintf("%s/api/v4/projects?per_page=1&page=1", c.baseURL)
+	url := fmt.Sprintf("%s/api/v4/projects?per_page=1&page=1", c.BaseURL)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return 0, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	req.Header.Set("PRIVATE-TOKEN", c.token)
+	req.Header.Set("PRIVATE-TOKEN", c.Token)
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
 		return 0, fmt.Errorf("request failed: %w", err)
 	}
@@ -138,17 +101,17 @@ func (c *Client) GetProjectCount(ctx context.Context) (int, error) {
 
 func (c *Client) GetProjectsPage(ctx context.Context, page int) ([]domain.Project, bool, error) {
 	// Order by last activity (commits, MRs, issues) - most recent first
-	url := fmt.Sprintf("%s/api/v4/projects?per_page=%d&page=%d&order_by=last_activity_at&sort=desc", c.baseURL, DefaultPageSize, page)
+	url := fmt.Sprintf("%s/api/v4/projects?per_page=%d&page=%d&order_by=last_activity_at&sort=desc", c.BaseURL, api.DefaultPageSize, page)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, false, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	req.Header.Set("PRIVATE-TOKEN", c.token)
+	req.Header.Set("PRIVATE-TOKEN", c.Token)
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
 		return nil, false, fmt.Errorf("request failed: %w", err)
 	}
@@ -194,8 +157,8 @@ func (c *Client) GetProjectsPage(ctx context.Context, page int) ([]domain.Projec
 
 // GetLatestPipeline retrieves the most recent pipeline for a project and branch.
 func (c *Client) GetLatestPipeline(ctx context.Context, projectID, branch string) (*domain.Pipeline, error) {
-	result, err := c.doRateLimited(ctx, func() (interface{}, error) {
-		url := fmt.Sprintf("%s/api/v4/projects/%s/pipelines?ref=%s&per_page=1", c.baseURL, projectID, branch)
+	result, err := c.DoRateLimited(ctx, func() (interface{}, error) {
+		url := fmt.Sprintf("%s/api/v4/projects/%s/pipelines?ref=%s&per_page=1", c.BaseURL, projectID, branch)
 
 		var glPipelines []gitlabPipeline
 		if err := c.doRequest(ctx, url, &glPipelines); err != nil {
@@ -217,8 +180,8 @@ func (c *Client) GetLatestPipeline(ctx context.Context, projectID, branch string
 
 // GetPipelines retrieves recent pipelines for a project.
 func (c *Client) GetPipelines(ctx context.Context, projectID string, limit int) ([]domain.Pipeline, error) {
-	result, err := c.doRateLimited(ctx, func() (interface{}, error) {
-		url := fmt.Sprintf("%s/api/v4/projects/%s/pipelines?per_page=%d", c.baseURL, projectID, limit)
+	result, err := c.DoRateLimited(ctx, func() (interface{}, error) {
+		url := fmt.Sprintf("%s/api/v4/projects/%s/pipelines?per_page=%d", c.BaseURL, projectID, limit)
 
 		var glPipelines []gitlabPipeline
 		if err := c.doRequest(ctx, url, &glPipelines); err != nil {
@@ -246,8 +209,8 @@ func (c *Client) GetBranches(ctx context.Context, projectID string, limit int) (
 		perPage = 100
 	}
 
-	result, err := c.doRateLimited(ctx, func() (interface{}, error) {
-		url := fmt.Sprintf("%s/api/v4/projects/%s/repository/branches?per_page=%d", c.baseURL, projectID, perPage)
+	result, err := c.DoRateLimited(ctx, func() (interface{}, error) {
+		url := fmt.Sprintf("%s/api/v4/projects/%s/repository/branches?per_page=%d", c.BaseURL, projectID, perPage)
 
 		var glBranches []gitlabBranch
 		if err := c.doRequest(ctx, url, &glBranches); err != nil {
@@ -276,10 +239,10 @@ func (c *Client) doRequest(ctx context.Context, url string, result interface{}) 
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 
-	req.Header.Set("PRIVATE-TOKEN", c.token)
+	req.Header.Set("PRIVATE-TOKEN", c.Token)
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("request failed: %w", err)
 	}
@@ -460,8 +423,8 @@ type gitlabBranch struct {
 
 // GetMergeRequests retrieves open merge requests for a project.
 func (c *Client) GetMergeRequests(ctx context.Context, projectID string) ([]domain.MergeRequest, error) {
-	result, err := c.doRateLimited(ctx, func() (interface{}, error) {
-		url := fmt.Sprintf("%s/api/v4/projects/%s/merge_requests?state=opened&per_page=50", c.baseURL, projectID)
+	result, err := c.DoRateLimited(ctx, func() (interface{}, error) {
+		url := fmt.Sprintf("%s/api/v4/projects/%s/merge_requests?state=opened&per_page=50", c.BaseURL, projectID)
 
 		var glMRs []gitlabMergeRequest
 		if err := c.doRequest(ctx, url, &glMRs); err != nil {
@@ -484,8 +447,8 @@ func (c *Client) GetMergeRequests(ctx context.Context, projectID string) ([]doma
 
 // GetIssues retrieves open issues for a project.
 func (c *Client) GetIssues(ctx context.Context, projectID string) ([]domain.Issue, error) {
-	result, err := c.doRateLimited(ctx, func() (interface{}, error) {
-		url := fmt.Sprintf("%s/api/v4/projects/%s/issues?state=opened&per_page=50", c.baseURL, projectID)
+	result, err := c.DoRateLimited(ctx, func() (interface{}, error) {
+		url := fmt.Sprintf("%s/api/v4/projects/%s/issues?state=opened&per_page=50", c.BaseURL, projectID)
 
 		var glIssues []gitlabIssue
 		if err := c.doRequest(ctx, url, &glIssues); err != nil {
@@ -508,8 +471,8 @@ func (c *Client) GetIssues(ctx context.Context, projectID string) ([]domain.Issu
 
 // GetCurrentUser retrieves the authenticated user's profile.
 func (c *Client) GetCurrentUser(ctx context.Context) (*domain.UserProfile, error) {
-	result, err := c.doRateLimited(ctx, func() (interface{}, error) {
-		url := fmt.Sprintf("%s/api/v4/user", c.baseURL)
+	result, err := c.DoRateLimited(ctx, func() (interface{}, error) {
+		url := fmt.Sprintf("%s/api/v4/user", c.BaseURL)
 
 		var glUser gitlabUser
 		if err := c.doRequest(ctx, url, &glUser); err != nil {

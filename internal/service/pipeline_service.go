@@ -13,6 +13,25 @@ import (
 	"github.com/vilaca/ci-dashboard/internal/domain"
 )
 
+const (
+	// MaxConcurrentWorkers limits the number of concurrent goroutines for fetching data
+	// This prevents overwhelming the system when processing many projects
+	MaxConcurrentWorkers = 50
+
+	// DefaultPipelinesPerProject is the default number of pipelines to fetch per project
+	DefaultPipelinesPerProject = 10
+
+	// PipelineFetchBuffer is the extra buffer added when calculating pipelines per project
+	PipelineFetchBuffer = 5
+
+	// RefreshOperationTimeout is the maximum time allowed for a refresh operation
+	RefreshOperationTimeout = 10 * time.Minute
+
+	// InitialRefreshDelay is the delay before the first background refresh
+	// This allows the server to fully start before fetching data
+	InitialRefreshDelay = 2 * time.Second
+)
+
 // PipelineService handles business logic for pipeline operations.
 // Follows Single Responsibility Principle - orchestrates pipeline operations.
 type PipelineService struct {
@@ -68,6 +87,60 @@ func fixIssueRepositoryNames(issues []domain.Issue, project domain.Project) {
 			issues[i].Repository = project.Name
 		}
 	}
+}
+
+// Worker pool helper to limit concurrent goroutines
+
+// processProjectsConcurrently processes a list of projects with limited concurrency.
+// Uses a worker pool pattern to prevent launching unbounded goroutines.
+func processProjectsConcurrently[T any](
+	ctx context.Context,
+	projects []domain.Project,
+	maxWorkers int,
+	processFunc func(context.Context, domain.Project) ([]T, error),
+) []T {
+	if maxWorkers <= 0 {
+		maxWorkers = MaxConcurrentWorkers
+	}
+
+	results := make(chan []T, len(projects))
+	semaphore := make(chan struct{}, maxWorkers)
+	var wg sync.WaitGroup
+
+	for _, proj := range projects {
+		wg.Add(1)
+		go func(p domain.Project) {
+			defer wg.Done()
+
+			// Acquire semaphore slot
+			select {
+			case semaphore <- struct{}{}:
+				defer func() { <-semaphore }()
+			case <-ctx.Done():
+				return
+			}
+
+			// Process project
+			items, err := processFunc(ctx, p)
+			if err == nil && len(items) > 0 {
+				results <- items
+			}
+		}(proj)
+	}
+
+	// Wait for all goroutines to complete
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	// Collect results
+	var allResults []T
+	for items := range results {
+		allResults = append(allResults, items...)
+	}
+
+	return allResults
 }
 
 // RegisterClient registers a CI/CD platform client.
@@ -464,9 +537,9 @@ func (s *PipelineService) GetProjectsPageByPlatform(ctx context.Context, platfor
 
 	// Filter projects based on whitelist
 	var whitelist []string
-	if platform == "gitlab" {
+	if platform == domain.PlatformGitLab {
 		whitelist = s.gitlabWhitelist
-	} else if platform == "github" {
+	} else if platform == domain.PlatformGitHub {
 		whitelist = s.githubWhitelist
 	}
 
@@ -655,12 +728,21 @@ func (s *PipelineService) GetRepositoriesWithRecentRuns(ctx context.Context, run
 	var results []RepositoryWithRuns
 	var mu sync.Mutex
 	var wg sync.WaitGroup
+	semaphore := make(chan struct{}, MaxConcurrentWorkers)
 
-	// For each project, fetch recent runs
+	// For each project, fetch recent runs with limited concurrency
 	for _, project := range projects {
 		wg.Add(1)
 		go func(proj domain.Project) {
 			defer wg.Done()
+
+			// Acquire semaphore slot
+			select {
+			case semaphore <- struct{}{}:
+				defer func() { <-semaphore }()
+			case <-ctx.Done():
+				return
+			}
 
 			var runs []domain.Pipeline
 
@@ -723,19 +805,28 @@ func (s *PipelineService) GetRecentPipelines(ctx context.Context, totalLimit int
 	var allPipelines []domain.Pipeline
 	var mu sync.Mutex
 	var wg sync.WaitGroup
+	semaphore := make(chan struct{}, MaxConcurrentWorkers)
 
 	// Calculate how many pipelines to fetch per project
 	// Fetch more than needed, then we'll sort and limit
-	pipelinesPerProject := 10
+	pipelinesPerProject := DefaultPipelinesPerProject
 	if len(projects) > 0 {
-		pipelinesPerProject = (totalLimit / len(projects)) + 5
+		pipelinesPerProject = (totalLimit / len(projects)) + PipelineFetchBuffer
 	}
 
-	// For each project, fetch recent runs
+	// For each project, fetch recent runs with limited concurrency
 	for _, project := range projects {
 		wg.Add(1)
 		go func(proj domain.Project) {
 			defer wg.Done()
+
+			// Acquire semaphore slot
+			select {
+			case semaphore <- struct{}{}:
+				defer func() { <-semaphore }()
+			case <-ctx.Done():
+				return
+			}
 
 			// Get the appropriate client for this project's platform
 			client := s.getClientForPlatform(proj.Platform)
@@ -779,7 +870,7 @@ func (s *PipelineService) GetAllMergeRequests(ctx context.Context) ([]domain.Mer
 		return nil, err
 	}
 
-	// Fetch merge requests concurrently
+	// Fetch merge requests concurrently with limited workers
 	type result struct {
 		mrs []domain.MergeRequest
 		err error
@@ -787,11 +878,20 @@ func (s *PipelineService) GetAllMergeRequests(ctx context.Context) ([]domain.Mer
 
 	results := make(chan result, len(projects))
 	var wg sync.WaitGroup
+	semaphore := make(chan struct{}, MaxConcurrentWorkers)
 
 	for _, project := range projects {
 		wg.Add(1)
 		go func(proj domain.Project) {
 			defer wg.Done()
+
+			// Acquire semaphore slot
+			select {
+			case semaphore <- struct{}{}:
+				defer func() { <-semaphore }()
+			case <-ctx.Done():
+				return
+			}
 
 			// Get the appropriate client for this project's platform
 			c := s.getClientForPlatform(proj.Platform)
@@ -936,11 +1036,20 @@ func (s *PipelineService) GetAllIssues(ctx context.Context) ([]domain.Issue, err
 
 	results := make(chan result, len(projects))
 	var wg sync.WaitGroup
+	semaphore := make(chan struct{}, MaxConcurrentWorkers)
 
 	for _, project := range projects {
 		wg.Add(1)
 		go func(proj domain.Project) {
 			defer wg.Done()
+
+			// Limit concurrent goroutines
+			select {
+			case semaphore <- struct{}{}:
+				defer func() { <-semaphore }()
+			case <-ctx.Done():
+				return
+			}
 
 			// Get the appropriate client for this project's platform
 			c := s.getClientForPlatform(proj.Platform)
@@ -1013,11 +1122,20 @@ func (s *PipelineService) GetAllBranches(ctx context.Context, limit int) ([]doma
 
 	results := make(chan result, len(projects))
 	var wg sync.WaitGroup
+	semaphore := make(chan struct{}, MaxConcurrentWorkers)
 
 	for _, project := range projects {
 		wg.Add(1)
 		go func(proj domain.Project) {
 			defer wg.Done()
+
+			// Limit concurrent goroutines
+			select {
+			case semaphore <- struct{}{}:
+				defer func() { <-semaphore }()
+			case <-ctx.Done():
+				return
+			}
 
 			// Get the appropriate client for this project's platform
 			client := s.getClientForPlatform(proj.Platform)

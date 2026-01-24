@@ -14,6 +14,11 @@ import (
 	"github.com/vilaca/ci-dashboard/internal/domain"
 )
 
+const (
+	// MemoryMonitorInterval is how often memory usage stats are logged
+	MemoryMonitorInterval = 30 * time.Second
+)
+
 // StaleCache implements stale-while-revalidate caching strategy.
 // Always serves cached data immediately (even if expired), refreshes in background.
 type StaleCache struct {
@@ -193,7 +198,7 @@ type CacheStats struct {
 
 // monitorMemory logs memory usage periodically.
 func (c *StaleCache) monitorMemory() {
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(MemoryMonitorInterval)
 	defer ticker.Stop()
 
 	for range ticker.C {
