@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/vilaca/ci-dashboard/internal/api"
@@ -23,17 +22,8 @@ type Client struct {
 	token      string
 	httpClient HTTPClient
 
-	// Rate limiting and deduplication
-	semaphore  chan struct{}            // Limits concurrent requests
-	inFlight   map[string]*requestState // Tracks in-flight requests
-	inFlightMu sync.Mutex               // Protects inFlight map
-}
-
-// requestState tracks a single in-flight request.
-type requestState struct {
-	done   chan struct{}  // Closed when request completes
-	result interface{}    // The result (or nil)
-	err    error          // Any error
+	// Rate limiting
+	semaphore chan struct{} // Limits concurrent requests
 }
 
 // HTTPClient interface for HTTP operations (allows mocking in tests).
@@ -55,91 +45,26 @@ func NewClient(config api.ClientConfig, httpClient HTTPClient) *Client {
 		token:      config.Token,
 		httpClient: httpClient,
 		semaphore:  make(chan struct{}, 5), // Max 5 concurrent requests
-		inFlight:   make(map[string]*requestState),
 	}
 }
 
-// doRequestWithDedup performs an HTTP request with deduplication and rate limiting.
-// If the same request is already in-flight, it waits for that request to complete
-// and returns the cached result instead of making a duplicate API call.
-func (c *Client) doRequestWithDedup(ctx context.Context, key string, fn func() (interface{}, error)) (interface{}, error) {
-	startTime := time.Now()
-
-	// Check if this request is already in-flight
-	c.inFlightMu.Lock()
-	if state, exists := c.inFlight[key]; exists {
-		// Request is in-flight, wait for it to complete
-		c.inFlightMu.Unlock()
-		log.Printf("[GitHub] %s - DEDUPED (waiting for in-flight request)", key)
-
-		select {
-		case <-state.done:
-			duration := time.Since(startTime)
-			if state.err != nil {
-				log.Printf("[GitHub] %s - DEDUPED ERROR (waited %v): %v", key, duration.Round(time.Millisecond), state.err)
-			} else {
-				log.Printf("[GitHub] %s - DEDUPED SUCCESS (waited %v)", key, duration.Round(time.Millisecond))
-			}
-			return state.result, state.err
-		case <-ctx.Done():
-			log.Printf("[GitHub] %s - DEDUPED CANCELLED (waited %v): %v", key, time.Since(startTime).Round(time.Millisecond), ctx.Err())
-			return nil, ctx.Err()
-		}
-	}
-
-	// Create new request state
-	state := &requestState{
-		done: make(chan struct{}),
-	}
-	c.inFlight[key] = state
-	c.inFlightMu.Unlock()
-
-	// Ensure cleanup on exit
-	defer func() {
-		c.inFlightMu.Lock()
-		delete(c.inFlight, key)
-		c.inFlightMu.Unlock()
-		close(state.done)
-	}()
-
+// doRateLimited performs an HTTP request with rate limiting via semaphore.
+func (c *Client) doRateLimited(ctx context.Context, fn func() (interface{}, error)) (interface{}, error) {
 	// Acquire semaphore (rate limiting)
-	semaphoreStart := time.Now()
 	select {
 	case c.semaphore <- struct{}{}:
 		defer func() { <-c.semaphore }()
-		queueTime := time.Since(semaphoreStart)
-		if queueTime > 100*time.Millisecond {
-			log.Printf("[GitHub] %s - QUEUED for %v (rate limit)", key, queueTime.Round(time.Millisecond))
-		}
 	case <-ctx.Done():
-		state.err = ctx.Err()
-		log.Printf("[GitHub] %s - CANCELLED (while queuing): %v", key, ctx.Err())
-		return nil, state.err
+		return nil, ctx.Err()
 	}
 
-	// Execute the actual request
-	log.Printf("[GitHub] %s - START", key)
-	requestStart := time.Now()
-	state.result, state.err = fn()
-	requestDuration := time.Since(requestStart)
-	totalDuration := time.Since(startTime)
-
-	if state.err != nil {
-		log.Printf("[GitHub] %s - ERROR (request: %v, total: %v): %v",
-			key, requestDuration.Round(time.Millisecond), totalDuration.Round(time.Millisecond), state.err)
-	} else {
-		log.Printf("[GitHub] %s - SUCCESS (request: %v, total: %v)",
-			key, requestDuration.Round(time.Millisecond), totalDuration.Round(time.Millisecond))
-	}
-
-	return state.result, state.err
+	// Execute the request
+	return fn()
 }
 
 // GetProjects retrieves repositories with Actions enabled.
 func (c *Client) GetProjects(ctx context.Context) ([]domain.Project, error) {
-	key := "GetProjects"
-
-	result, err := c.doRequestWithDedup(ctx, key, func() (interface{}, error) {
+	result, err := c.doRateLimited(ctx, func() (interface{}, error) {
 		var allProjects []domain.Project
 		page := 1
 
@@ -157,8 +82,6 @@ func (c *Client) GetProjects(ctx context.Context) ([]domain.Project, error) {
 
 			page++
 		}
-
-		log.Printf("[GitHub] GetProjects - completed, fetched %d total repositories", len(allProjects))
 
 		return allProjects, nil
 	})
@@ -278,8 +201,6 @@ func (c *Client) GetProjectsPage(ctx context.Context, page int) ([]domain.Projec
 		hasNextPage = true
 	}
 
-	log.Printf("[GitHub] GetProjectsPage %d (fetched %d repositories, has next: %v)", page, len(ghRepos), hasNextPage)
-
 	// If no repositories returned, definitely no more pages
 	if len(ghRepos) == 0 {
 		hasNextPage = false
@@ -290,9 +211,7 @@ func (c *Client) GetProjectsPage(ctx context.Context, page int) ([]domain.Projec
 
 // GetLatestPipeline retrieves the most recent workflow run for a repository and branch.
 func (c *Client) GetLatestPipeline(ctx context.Context, projectID, branch string) (*domain.Pipeline, error) {
-	key := fmt.Sprintf("GetLatestPipeline:%s:%s", projectID, branch)
-
-	result, err := c.doRequestWithDedup(ctx, key, func() (interface{}, error) {
+	result, err := c.doRateLimited(ctx, func() (interface{}, error) {
 		// projectID format: "owner/repo"
 		url := fmt.Sprintf("%s/repos/%s/actions/runs?branch=%s&per_page=1", c.baseURL, projectID, branch)
 
@@ -316,9 +235,7 @@ func (c *Client) GetLatestPipeline(ctx context.Context, projectID, branch string
 
 // GetPipelines retrieves recent workflow runs for a repository.
 func (c *Client) GetPipelines(ctx context.Context, projectID string, limit int) ([]domain.Pipeline, error) {
-	key := fmt.Sprintf("GetPipelines:%s:%d", projectID, limit)
-
-	result, err := c.doRequestWithDedup(ctx, key, func() (interface{}, error) {
+	result, err := c.doRateLimited(ctx, func() (interface{}, error) {
 		url := fmt.Sprintf("%s/repos/%s/actions/runs?per_page=%d", c.baseURL, projectID, limit)
 
 		var response githubWorkflowRunsResponse
@@ -342,9 +259,7 @@ func (c *Client) GetPipelines(ctx context.Context, projectID string, limit int) 
 
 // GetWorkflowRuns retrieves runs for a specific workflow.
 func (c *Client) GetWorkflowRuns(ctx context.Context, projectID string, workflowID string, limit int) ([]domain.Pipeline, error) {
-	key := fmt.Sprintf("GetWorkflowRuns:%s:%s:%d", projectID, workflowID, limit)
-
-	result, err := c.doRequestWithDedup(ctx, key, func() (interface{}, error) {
+	result, err := c.doRateLimited(ctx, func() (interface{}, error) {
 		url := fmt.Sprintf("%s/repos/%s/actions/workflows/%s/runs?per_page=%d",
 			c.baseURL, projectID, workflowID, limit)
 
@@ -374,9 +289,7 @@ func (c *Client) GetBranches(ctx context.Context, projectID string, limit int) (
 		perPage = 100
 	}
 
-	key := fmt.Sprintf("GetBranches:%s:%d", projectID, perPage)
-
-	result, err := c.doRequestWithDedup(ctx, key, func() (interface{}, error) {
+	result, err := c.doRateLimited(ctx, func() (interface{}, error) {
 		// First, get repository info to find the default branch
 		repoURL := fmt.Sprintf("%s/repos/%s", c.baseURL, projectID)
 		var repo githubRepository
@@ -481,14 +394,16 @@ func (c *Client) doRequestWithRetry(ctx context.Context, url string, result inte
 
 						select {
 						case <-time.After(waitDuration + time.Second):
-							continue // Retry after rate limit resets
+							// Retry after rate limit resets (don't count against retry attempts)
+							attempt--
+							continue
 						case <-ctx.Done():
 							return ctx.Err()
 						}
 					}
 				}
-				lastErr = fmt.Errorf("GitHub API rate limit exceeded (resets at %v): %s", resetTime.Format("15:04:05"), bodyStr)
-				continue
+				// Rate limit with no reset time or reset time too far in future - fail immediately
+				return fmt.Errorf("GitHub API rate limit exceeded (resets at %v): %s", resetTime.Format("15:04:05"), bodyStr)
 			}
 
 			return fmt.Errorf("API returned status %d: %s", resp.StatusCode, bodyStr)
@@ -528,8 +443,8 @@ func (c *Client) logRateLimitStatus(headers http.Header) {
 	limitInt, _ := strconv.Atoi(limit)
 	remainingInt, _ := strconv.Atoi(remaining)
 
-	// Log warning when below 20% of rate limit
-	if limitInt > 0 && remainingInt < limitInt/5 {
+	// Log warning when below 5% of rate limit
+	if limitInt > 0 && remainingInt < limitInt/20 {
 		resetTime := c.getRateLimitReset(headers)
 		log.Printf("GitHub API: Rate limit warning - %d/%d requests remaining (resets at %v)",
 			remainingInt, limitInt, resetTime.Format("15:04:05"))
@@ -748,9 +663,7 @@ type githubCommit struct {
 
 // GetMergeRequests retrieves open pull requests for a repository.
 func (c *Client) GetMergeRequests(ctx context.Context, projectID string) ([]domain.MergeRequest, error) {
-	key := fmt.Sprintf("GetMergeRequests:%s", projectID)
-
-	result, err := c.doRequestWithDedup(ctx, key, func() (interface{}, error) {
+	result, err := c.doRateLimited(ctx, func() (interface{}, error) {
 		// projectID format: "owner/repo"
 		url := fmt.Sprintf("%s/repos/%s/pulls?state=open&per_page=50", c.baseURL, projectID)
 
@@ -775,9 +688,7 @@ func (c *Client) GetMergeRequests(ctx context.Context, projectID string) ([]doma
 
 // GetIssues retrieves open issues for a repository.
 func (c *Client) GetIssues(ctx context.Context, projectID string) ([]domain.Issue, error) {
-	key := fmt.Sprintf("GetIssues:%s", projectID)
-
-	result, err := c.doRequestWithDedup(ctx, key, func() (interface{}, error) {
+	result, err := c.doRateLimited(ctx, func() (interface{}, error) {
 		// projectID format: "owner/repo"
 		url := fmt.Sprintf("%s/repos/%s/issues?state=open&per_page=50", c.baseURL, projectID)
 
@@ -805,9 +716,7 @@ func (c *Client) GetIssues(ctx context.Context, projectID string) ([]domain.Issu
 
 // GetCurrentUser retrieves the authenticated user's profile.
 func (c *Client) GetCurrentUser(ctx context.Context) (*domain.UserProfile, error) {
-	key := "GetCurrentUser"
-
-	result, err := c.doRequestWithDedup(ctx, key, func() (interface{}, error) {
+	result, err := c.doRateLimited(ctx, func() (interface{}, error) {
 		url := fmt.Sprintf("%s/user", c.baseURL)
 
 		var ghUser githubUser

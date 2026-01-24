@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -104,20 +105,13 @@ func (s *PipelineService) forceRefreshClientPageByPage(ctx context.Context, plat
 			break
 		}
 
-		fmt.Printf("[%s] Page %d: fetched %d projects\n", platform, page, len(projects))
-
 		// Process each project individually and cache incrementally
-		for i, project := range projects {
+		for _, project := range projects {
 			// Add this project to accumulator
 			allProjects = append(allProjects, project)
 
 			// Cache immediately after each project (1, 2, 3... 17...)
 			cacher.PopulateProjects(allProjects)
-
-			// Log progress every 10 projects to avoid spam
-			if (i+1)%10 == 0 || i == len(projects)-1 {
-				fmt.Printf("[%s] Cached %d projects (UI updated)\n", platform, len(allProjects))
-			}
 
 			// Fetch data for this single project
 			if err := s.forceRefreshDataForProjects(ctx, platform, cacher, []domain.Project{project}); err != nil {
@@ -132,7 +126,6 @@ func (s *PipelineService) forceRefreshClientPageByPage(ctx context.Context, plat
 		page++
 	}
 
-	fmt.Printf("[%s] Completed refresh: %d total projects across %d pages\n", platform, len(allProjects), page)
 	return nil
 }
 
@@ -169,6 +162,16 @@ func (s *PipelineService) forceRefreshDataForProjects(ctx context.Context, platf
 			key := fmt.Sprintf("GetBranches:%s:50", pid)
 			if err := client.ForceRefresh(ctx, key); err != nil {
 				errChan <- fmt.Errorf("GetBranches %s: %w", pid, err)
+			}
+		}(projectID)
+
+		// Fetch pipelines for repository detail page
+		wg.Add(1)
+		go func(pid string) {
+			defer wg.Done()
+			key := fmt.Sprintf("GetPipelines:%s:50", pid)
+			if err := client.ForceRefresh(ctx, key); err != nil {
+				// Ignore errors - will retry on next refresh
 			}
 		}(projectID)
 
@@ -243,6 +246,10 @@ func (s *PipelineService) GetPipelinesForProject(ctx context.Context, projectID 
 	pipelines, err := client.GetPipelines(ctx, projectID, limit)
 	if err != nil {
 		return nil, err
+	}
+
+	if len(pipelines) == 0 {
+		log.Printf("[PipelineService] GetPipelinesForProject: project %s has 0 pipelines (may be cache miss)", projectID)
 	}
 
 	return pipelines, nil

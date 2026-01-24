@@ -230,9 +230,9 @@ func (r *HTMLRenderer) RenderRepositoryDetail(w io.Writer, repository service.Re
 
 		<!-- Tabs -->
 		<div class="tabs">
-			<button class="tab-button active" onclick="switchTab('pipelines')">Pipelines (` + fmt.Sprintf("%d", len(repository.Runs)) + `)</button>
-			<button class="tab-button" onclick="switchTab('mrs')">MRs/PRs (` + fmt.Sprintf("%d", len(mrs)) + `)</button>
-			<button class="tab-button" onclick="switchTab('issues')">Issues (` + fmt.Sprintf("%d", len(issues)) + `)</button>
+			<button class="tab-button active" data-tab="pipelines" onclick="switchTab('pipelines', this)">Pipelines (` + fmt.Sprintf("%d", len(repository.Runs)) + `)</button>
+			<button class="tab-button" data-tab="mrs" onclick="switchTab('mrs', this)">MRs/PRs (` + fmt.Sprintf("%d", len(mrs)) + `)</button>
+			<button class="tab-button" data-tab="issues" onclick="switchTab('issues', this)">Issues (` + fmt.Sprintf("%d", len(issues)) + `)</button>
 		</div>
 
 		<!-- Pipelines Tab -->
@@ -287,18 +287,27 @@ func (r *HTMLRenderer) RenderRepositoryDetail(w io.Writer, repository service.Re
 		</div>
 
 		<script>
-			function switchTab(tabName) {
-				// Hide all tabs
+			function switchTab(tabName, button) {
+				// Hide all tab contents
 				document.querySelectorAll('.tab-content').forEach(tab => {
 					tab.classList.remove('active');
 				});
+
+				// Remove active from all buttons
 				document.querySelectorAll('.tab-button').forEach(btn => {
 					btn.classList.remove('active');
 				});
 
 				// Show selected tab
-				document.getElementById(tabName + '-tab').classList.add('active');
-				event.target.classList.add('active');
+				const selectedTab = document.getElementById(tabName + '-tab');
+				if (selectedTab) {
+					selectedTab.classList.add('active');
+				}
+
+				// Add active to clicked button
+				if (button) {
+					button.classList.add('active');
+				}
 			}
 		</script>
 	</div>`)

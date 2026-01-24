@@ -295,6 +295,8 @@ func (h *Handler) handleRepositoryDetailAPI(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	h.logger.Printf("[RepositoryDetail] Loading detail for repository: %s", repositoryID)
+
 	// Get all projects to find the specific one (from cache)
 	projects, err := h.pipelineService.GetAllProjects(r.Context())
 	if err != nil {
@@ -302,6 +304,8 @@ func (h *Handler) handleRepositoryDetailAPI(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
+
+	h.logger.Printf("[RepositoryDetail] Found %d total projects in cache", len(projects))
 
 	// Find the project by ID
 	var project *domain.Project
@@ -313,10 +317,18 @@ func (h *Handler) handleRepositoryDetailAPI(w http.ResponseWriter, r *http.Reque
 	}
 
 	if project == nil {
-		h.logger.Printf("[RepositoryDetail] repository not found: %s", repositoryID)
+		h.logger.Printf("[RepositoryDetail] repository not found: %s (available project IDs: %v)", repositoryID, func() []string {
+			ids := make([]string, 0, len(projects))
+			for _, p := range projects {
+				ids = append(ids, p.ID)
+			}
+			return ids
+		}())
 		http.Error(w, "Repository not found", http.StatusNotFound)
 		return
 	}
+
+	h.logger.Printf("[RepositoryDetail] Found project: %s (platform: %s)", project.Name, project.Platform)
 
 	// Get pipelines for this specific project (from cache)
 	pipelines, err := h.pipelineService.GetPipelinesForProject(r.Context(), repositoryID, 50)
@@ -325,6 +337,8 @@ func (h *Handler) handleRepositoryDetailAPI(w http.ResponseWriter, r *http.Reque
 		// Continue with empty pipelines
 		pipelines = []domain.Pipeline{}
 	}
+
+	h.logger.Printf("[RepositoryDetail] Found %d pipelines for %s", len(pipelines), repositoryID)
 
 	// Fill in repository name from project
 	for i := range pipelines {
@@ -361,6 +375,8 @@ func (h *Handler) handleRepositoryDetailAPI(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
+	h.logger.Printf("[RepositoryDetail] Found %d MRs for %s", len(repoMRs), repositoryID)
+
 	// Filter Issues for this repository
 	var repoIssues []domain.Issue
 	for _, issue := range allIssues {
@@ -368,6 +384,8 @@ func (h *Handler) handleRepositoryDetailAPI(w http.ResponseWriter, r *http.Reque
 			repoIssues = append(repoIssues, issue)
 		}
 	}
+
+	h.logger.Printf("[RepositoryDetail] Found %d issues for %s", len(repoIssues), repositoryID)
 
 	// Cache avatars for users in MRs and Issues
 	var wg sync.WaitGroup

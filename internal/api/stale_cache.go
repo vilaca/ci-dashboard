@@ -39,9 +39,6 @@ func NewStaleCache(ttl, staleTTL time.Duration) *StaleCache {
 		staleTTL: staleTTL,
 	}
 
-	// Start memory monitoring goroutine
-	go c.monitorMemory()
-
 	return c
 }
 
@@ -63,18 +60,11 @@ func (c *StaleCache) Get(key string) (interface{}, bool, bool) {
 
 	// Check if entry is completely stale (unusable)
 	if now.After(entry.staleUntil) {
-		log.Printf("[StaleCache] %s - TOO STALE (cached %v ago)", key, now.Sub(entry.cachedAt).Round(time.Second))
 		return nil, false, false
 	}
 
 	// Check if entry is fresh
 	isFresh := now.Before(entry.expiresAt)
-
-	if isFresh {
-		log.Printf("[StaleCache] %s - FRESH HIT (age: %v)", key, now.Sub(entry.cachedAt).Round(time.Second))
-	} else {
-		log.Printf("[StaleCache] %s - STALE HIT (expired %v ago, still usable)", key, now.Sub(entry.expiresAt).Round(time.Second))
-	}
 
 	return entry.value, isFresh, true
 }
@@ -260,7 +250,6 @@ func (c *StaleCachingClient) GetProjects(ctx context.Context) ([]domain.Project,
 	}
 
 	// Cache miss - return empty (background will populate)
-	log.Printf("[StaleCache] %s - MISS, returning empty (background will populate)", key)
 	return []domain.Project{}, nil
 }
 
@@ -274,7 +263,6 @@ func (c *StaleCachingClient) GetLatestPipeline(ctx context.Context, projectID, b
 	}
 
 	// Cache miss - return nil (background will populate)
-	log.Printf("[StaleCache] %s - MISS, returning nil (background will populate)", key)
 	return nil, nil
 }
 
@@ -291,7 +279,6 @@ func (c *StaleCachingClient) GetProjectCount(ctx context.Context) (int, error) {
 	}
 
 	// Cache miss - return 0 (background will populate)
-	log.Printf("[StaleCache] %s - MISS, returning 0 (background will populate)", key)
 	return 0, nil
 }
 
@@ -303,7 +290,6 @@ func (c *StaleCachingClient) GetPipelines(ctx context.Context, projectID string,
 	}
 
 	// Cache miss - return empty (background will populate)
-	log.Printf("[StaleCache] %s - MISS, returning empty (background will populate)", key)
 	return []domain.Pipeline{}, nil
 }
 
@@ -315,7 +301,6 @@ func (c *StaleCachingClient) GetBranches(ctx context.Context, projectID string, 
 	}
 
 	// Cache miss - return empty (background will populate)
-	log.Printf("[StaleCache] %s - MISS, returning empty (background will populate)", key)
 	return []domain.Branch{}, nil
 }
 
@@ -332,7 +317,6 @@ func (c *StaleCachingClient) GetMergeRequests(ctx context.Context, projectID str
 	}
 
 	// Cache miss - return empty (background will populate)
-	log.Printf("[StaleCache] %s - MISS, returning empty (background will populate)", key)
 	return []domain.MergeRequest{}, nil
 }
 
@@ -349,7 +333,6 @@ func (c *StaleCachingClient) GetIssues(ctx context.Context, projectID string) ([
 	}
 
 	// Cache miss - return empty (background will populate)
-	log.Printf("[StaleCache] %s - MISS, returning empty (background will populate)", key)
 	return []domain.Issue{}, nil
 }
 
@@ -366,7 +349,6 @@ func (c *StaleCachingClient) GetCurrentUser(ctx context.Context) (*domain.UserPr
 	}
 
 	// Cache miss - return nil (background will populate)
-	log.Printf("[StaleCache] %s - MISS, returning nil (background will populate)", key)
 	return nil, nil
 }
 
@@ -389,7 +371,6 @@ func (c *StaleCachingClient) PopulateProjects(projects []domain.Project) {
 	key := "GetProjects"
 	c.cache.Set(key, projects, "", time.Time{})
 	c.cache.Set("GetProjectCount", len(projects), "", time.Time{})
-	log.Printf("[StaleCache] Pre-populated: %s (%d projects)", key, len(projects))
 }
 
 // PopulatePipelines pre-populates the cache with pipeline data.
@@ -421,8 +402,6 @@ func (c *StaleCachingClient) PopulatePipelines(pipelines []domain.Pipeline) {
 			c.cache.Set(key, &pipeline, pipeline.ProjectID, pipeline.UpdatedAt)
 		}
 	}
-
-	log.Printf("[StaleCache] Pre-populated: %d pipelines across %d projects", len(pipelines), len(projectPipelines))
 }
 
 // PopulateBranches pre-populates the cache with branch data.
@@ -446,8 +425,6 @@ func (c *StaleCachingClient) PopulateBranches(branches []domain.Branch) {
 		}
 		c.cache.Set(key, branchList, projectID, lastCommit)
 	}
-
-	log.Printf("[StaleCache] Pre-populated: %d branches across %d projects", len(branches), len(projectBranches))
 }
 
 // PopulateMergeRequests pre-populates the cache with merge request data.
@@ -471,8 +448,6 @@ func (c *StaleCachingClient) PopulateMergeRequests(mrs []domain.MergeRequest) {
 		}
 		c.cache.Set(key, mrList, projectID, lastUpdate)
 	}
-
-	log.Printf("[StaleCache] Pre-populated: %d merge requests across %d projects", len(mrs), len(projectMRs))
 }
 
 // PopulateIssues pre-populates the cache with issue data.
@@ -496,8 +471,6 @@ func (c *StaleCachingClient) PopulateIssues(issues []domain.Issue) {
 		}
 		c.cache.Set(key, issueList, projectID, lastUpdate)
 	}
-
-	log.Printf("[StaleCache] Pre-populated: %d issues across %d projects", len(issues), len(projectIssues))
 }
 
 // PopulateUserProfiles pre-populates the cache with user profile data.
@@ -511,7 +484,6 @@ func (c *StaleCachingClient) PopulateUserProfiles(profiles []domain.UserProfile)
 	if len(profiles) > 0 {
 		key := "GetCurrentUser"
 		c.cache.Set(key, &profiles[0], "", time.Time{})
-		log.Printf("[StaleCache] Pre-populated: GetCurrentUser (%s)", profiles[0].Username)
 	}
 }
 
