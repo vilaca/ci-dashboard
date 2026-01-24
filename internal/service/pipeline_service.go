@@ -136,6 +136,7 @@ func (s *PipelineService) forceRefreshDataForProjects(ctx context.Context, platf
 
 	for _, project := range projects {
 		projectID := project.ID
+		projectName := project.Name
 		defaultBranch := project.DefaultBranch
 		if defaultBranch == "" {
 			defaultBranch = "main"
@@ -157,13 +158,13 @@ func (s *PipelineService) forceRefreshDataForProjects(ctx context.Context, platf
 
 		// Fetch branches
 		wg.Add(1)
-		go func(pid string) {
+		go func(pid, pname string) {
 			defer wg.Done()
 			key := fmt.Sprintf("GetBranches:%s:50", pid)
 			if err := client.ForceRefresh(ctx, key); err != nil {
-				errChan <- fmt.Errorf("GetBranches %s: %w", pid, err)
+				errChan <- fmt.Errorf("GetBranches %s: %w", pname, err)
 			}
-		}(projectID)
+		}(projectID, projectName)
 
 		// Fetch pipelines for repository detail page
 		wg.Add(1)
