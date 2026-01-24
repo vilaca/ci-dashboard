@@ -47,6 +47,7 @@ type Logger interface {
 type PipelineService interface {
 	GetAllProjects(ctx context.Context) ([]domain.Project, error)
 	GetPipelinesByProject(ctx context.Context, projectIDs []string) ([]domain.Pipeline, error)
+	GetPipelinesForProject(ctx context.Context, projectID string, limit int) ([]domain.Pipeline, error)
 	GetLatestPipelines(ctx context.Context) ([]domain.Pipeline, error)
 	GroupPipelinesByWorkflow(pipelines []domain.Pipeline) map[string][]domain.Pipeline
 	GetPipelinesByWorkflow(ctx context.Context, projectID, workflowID string, limit int) ([]domain.Pipeline, error)
@@ -294,29 +295,49 @@ func (h *Handler) handleRepositoryDetailAPI(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Get all repositories to find the specific one
-	repositories, err := h.pipelineService.GetRepositoriesWithRecentRuns(r.Context(), 50)
+	// Get all projects to find the specific one (from cache)
+	projects, err := h.pipelineService.GetAllProjects(r.Context())
 	if err != nil {
-		h.logger.Printf("failed to get repositories: %v", err)
+		h.logger.Printf("failed to get projects: %v", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 
-	// Find the repository by ID
-	var repository *RepositoryWithRuns
-	for i := range repositories {
-		if repositories[i].Project.ID == repositoryID {
-			repository = &repositories[i]
+	// Find the project by ID
+	var project *domain.Project
+	for i := range projects {
+		if projects[i].ID == repositoryID {
+			project = &projects[i]
 			break
 		}
 	}
 
-	if repository == nil {
+	if project == nil {
 		http.Error(w, "Repository not found", http.StatusNotFound)
 		return
 	}
 
-	// Get MRs and Issues for this repository
+	// Get pipelines for this specific project (from cache)
+	pipelines, err := h.pipelineService.GetPipelinesForProject(r.Context(), repositoryID, 50)
+	if err != nil {
+		h.logger.Printf("failed to get pipelines for project %s: %v", repositoryID, err)
+		// Continue with empty pipelines
+		pipelines = []domain.Pipeline{}
+	}
+
+	// Fill in repository name from project
+	for i := range pipelines {
+		if pipelines[i].Repository == "" || pipelines[i].Repository == project.ID {
+			pipelines[i].Repository = project.Name
+		}
+	}
+
+	repository := RepositoryWithRuns{
+		Project: *project,
+		Runs:    pipelines,
+	}
+
+	// Get MRs and Issues for this repository (from cache)
 	allMRs, err := h.pipelineService.GetAllMergeRequests(r.Context())
 	if err != nil {
 		h.logger.Printf("failed to get merge requests: %v", err)
@@ -347,9 +368,41 @@ func (h *Handler) handleRepositoryDetailAPI(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
+	// Cache avatars for users in MRs and Issues
+	var wg sync.WaitGroup
+	seen := make(map[string]bool)
+
+	// Cache MR authors (all from same repository/platform)
+	for _, mr := range repoMRs {
+		key := project.Platform + ":" + mr.Author
+		if !seen[key] && mr.Author != "" {
+			seen[key] = true
+			wg.Add(1)
+			go func(platform, author string) {
+				defer wg.Done()
+				h.cacheAvatar(platform, author, "", "")
+			}(project.Platform, mr.Author)
+		}
+	}
+
+	// Cache Issue authors (all from same repository/platform)
+	for _, issue := range repoIssues {
+		key := project.Platform + ":" + issue.Author
+		if !seen[key] && issue.Author != "" {
+			seen[key] = true
+			wg.Add(1)
+			go func(platform, author string) {
+				defer wg.Done()
+				h.cacheAvatar(platform, author, "", "")
+			}(project.Platform, issue.Author)
+		}
+	}
+
+	wg.Wait()
+
 	// Render to a buffer to get HTML string
 	var buf strings.Builder
-	if err := h.renderer.RenderRepositoryDetail(&buf, *repository, repoMRs, repoIssues); err != nil {
+	if err := h.renderer.RenderRepositoryDetail(&buf, repository, repoMRs, repoIssues); err != nil {
 		h.logger.Printf("failed to render repository detail: %v", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
