@@ -17,6 +17,13 @@ import (
 	"github.com/vilaca/ci-dashboard/internal/service"
 )
 
+const (
+	// AvatarCacheTTL is how long avatar images are cached
+	AvatarCacheTTL = 24 * time.Hour
+	// AvatarCleanupInterval is how often expired avatars are removed from cache
+	AvatarCleanupInterval = 1 * time.Hour
+)
+
 // avatarCacheEntry stores avatar data with expiration time
 type avatarCacheEntry struct {
 	data      []byte
@@ -98,7 +105,7 @@ func NewHandler(cfg HandlerConfig) *Handler {
 	}
 
 	// Start background cleanup goroutine for avatar cache (runs every hour)
-	go h.cleanupAvatarCache(1 * time.Hour)
+	go h.cleanupAvatarCache(AvatarCleanupInterval)
 
 	return h
 }
@@ -208,10 +215,16 @@ func (h *Handler) handleRepositoriesBulk(w http.ResponseWriter, r *http.Request)
 	results := make([]RepositoryDefaultBranch, 0, len(projects))
 	for _, project := range projects {
 		// Fetch cached data for this project
-		defaultBranch, pipeline, branchCount, _ := h.pipelineService.GetDefaultBranchForProject(ctx, project)
+		defaultBranch, pipeline, branchCount, err := h.pipelineService.GetDefaultBranchForProject(ctx, project)
+		if err != nil {
+			h.logger.Printf("Failed to get default branch for project %s: %v", project.Name, err)
+		}
 
 		// Fetch cached MRs for this project
-		mrs, _ := h.pipelineService.GetMergeRequestsForProject(ctx, project)
+		mrs, err := h.pipelineService.GetMergeRequestsForProject(ctx, project)
+		if err != nil {
+			h.logger.Printf("Failed to get merge requests for project %s: %v", project.Name, err)
+		}
 
 		// Count open and draft MRs
 		openMRCount := 0
@@ -576,7 +589,7 @@ func (h *Handler) cacheAvatar(platform, username, email, avatarURL string) {
 	h.avatarCacheMu.Lock()
 	h.avatarCache[cacheKey] = &avatarCacheEntry{
 		data:      imageData,
-		expiresAt: time.Now().Add(24 * time.Hour),
+		expiresAt: time.Now().Add(AvatarCacheTTL),
 	}
 	h.avatarCacheMu.Unlock()
 

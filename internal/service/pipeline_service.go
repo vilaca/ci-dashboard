@@ -69,7 +69,7 @@ func (s *PipelineService) ForceRefreshAllCaches(ctx context.Context) error {
 	for err := range errChan {
 		errs = append(errs, err)
 		successCount--
-		fmt.Printf("Force refresh error: %v\n", err)
+		log.Printf("Force refresh error: %v", err)
 	}
 
 	// Only fail if ALL platforms failed
@@ -83,7 +83,7 @@ func (s *PipelineService) ForceRefreshAllCaches(ctx context.Context) error {
 
 // forceRefreshClientPageByPage fetches projects page-by-page and all related data for each page.
 func (s *PipelineService) forceRefreshClientPageByPage(ctx context.Context, platform string, client api.Client) error {
-	fmt.Printf("[%s] Starting page-by-page refresh...\n", platform)
+	log.Printf("[%s] Starting page-by-page refresh...", platform)
 
 	// Check if client is a stale caching client
 	type staleCacher interface {
@@ -128,7 +128,7 @@ func (s *PipelineService) forceRefreshClientPageByPage(ctx context.Context, plat
 
 			// Fetch data for this single project
 			if err := s.forceRefreshDataForProjects(ctx, platform, cacher, []domain.Project{project}); err != nil {
-				fmt.Printf("[%s] Warning: failed to fetch data for project %s: %v\n", platform, project.Name, err)
+				log.Printf("[%s] Warning: failed to fetch data for project %s: %v", platform, project.Name, err)
 			}
 		}
 
@@ -164,7 +164,9 @@ func (s *PipelineService) forceRefreshDataForProjects(ctx context.Context, platf
 				// Try master if main fails
 				if branch == "main" {
 					key = fmt.Sprintf("GetLatestPipeline:%s:master", pid)
-					_ = client.ForceRefresh(ctx, key)
+					if err := client.ForceRefresh(ctx, key); err != nil {
+						log.Printf("Failed to fetch pipeline for %s on both main and master branches: %v", pid, err)
+					}
 				}
 			}
 		}(projectID, defaultBranch)
@@ -215,7 +217,7 @@ func (s *PipelineService) forceRefreshDataForProjects(ctx context.Context, platf
 
 	// Collect errors (but don't fail - just log)
 	for err := range errChan {
-		fmt.Printf("[%s] Warning: %v\n", platform, err)
+		log.Printf("[%s] Warning: %v", platform, err)
 	}
 
 	return nil
@@ -808,7 +810,7 @@ func (s *PipelineService) GetAllMergeRequests(ctx context.Context) ([]domain.Mer
 	for r := range results {
 		if r.err != nil {
 			// Log error but continue with other projects
-			fmt.Printf("Error fetching merge requests: %v\n", r.err)
+			log.Printf("Error fetching merge requests: %v", r.err)
 			continue
 		}
 		allMRs = append(allMRs, r.mrs...)
@@ -878,7 +880,7 @@ func (s *PipelineService) GetUserProfiles(ctx context.Context) ([]domain.UserPro
 			profile, err := client.GetCurrentUser(ctx)
 			if err != nil {
 				// Log error but don't fail the whole operation
-				fmt.Printf("Failed to get user profile for %s: %v\n", p, err)
+				log.Printf("Failed to get user profile for %s: %v", p, err)
 				return
 			}
 
@@ -965,7 +967,7 @@ func (s *PipelineService) GetAllIssues(ctx context.Context) ([]domain.Issue, err
 	for r := range results {
 		if r.err != nil {
 			// Log error but continue with other projects
-			fmt.Printf("Error fetching issues: %v\n", r.err)
+			log.Printf("Error fetching issues: %v", r.err)
 			continue
 		}
 		allIssues = append(allIssues, r.issues...)
@@ -1034,7 +1036,7 @@ func (s *PipelineService) GetAllBranches(ctx context.Context, limit int) ([]doma
 	var allBranches []domain.Branch
 	for r := range results {
 		if r.err != nil {
-			fmt.Printf("Error fetching branches: %v\n", r.err)
+			log.Printf("Error fetching branches: %v", r.err)
 			continue
 		}
 		allBranches = append(allBranches, r.branches...)

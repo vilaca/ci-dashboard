@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"runtime"
+	"strconv"
 	"sync"
 	"time"
 
@@ -592,10 +593,8 @@ func (c *StaleCachingClient) ForceRefresh(ctx context.Context, key string) error
 			return fmt.Errorf("invalid key format: %s", key)
 		}
 		limit := 50
-		for _, ch := range parts[2] {
-			if ch >= '0' && ch <= '9' {
-				limit = limit*10 + int(ch-'0')
-			}
+		if parsedLimit, err := strconv.Atoi(parts[2]); err == nil && parsedLimit > 0 {
+			limit = parsedLimit
 		}
 		branches, fetchErr := c.client.GetBranches(ctx, parts[1], limit)
 		if fetchErr != nil {
@@ -612,10 +611,8 @@ func (c *StaleCachingClient) ForceRefresh(ctx context.Context, key string) error
 			return fmt.Errorf("invalid key format: %s", key)
 		}
 		limit := 50
-		for _, ch := range parts[2] {
-			if ch >= '0' && ch <= '9' {
-				limit = limit*10 + int(ch-'0')
-			}
+		if parsedLimit, err := strconv.Atoi(parts[2]); err == nil && parsedLimit > 0 {
+			limit = parsedLimit
 		}
 		pipelines, fetchErr := c.client.GetPipelines(ctx, parts[1], limit)
 		if fetchErr != nil {

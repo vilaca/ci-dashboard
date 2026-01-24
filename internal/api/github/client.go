@@ -15,6 +15,15 @@ import (
 	"github.com/vilaca/ci-dashboard/internal/domain"
 )
 
+const (
+	// MaxConcurrentRequests limits concurrent API requests to avoid overwhelming the API
+	MaxConcurrentRequests = 5
+	// MaxRetryAttempts is the maximum number of retry attempts for failed requests
+	MaxRetryAttempts = 3
+	// DefaultPageSize is the default number of items per page
+	DefaultPageSize = 100
+)
+
 // Client implements api.Client for GitHub Actions.
 // Follows Single Responsibility Principle - only handles GitHub API communication.
 type Client struct {
@@ -44,7 +53,7 @@ func NewClient(config api.ClientConfig, httpClient HTTPClient) *Client {
 		baseURL:    baseURL,
 		token:      config.Token,
 		httpClient: httpClient,
-		semaphore:  make(chan struct{}, 5), // Max 5 concurrent requests
+		semaphore:  make(chan struct{}, MaxConcurrentRequests),
 	}
 }
 
@@ -157,7 +166,7 @@ func (c *Client) GetProjectCount(ctx context.Context) (int, error) {
 
 func (c *Client) GetProjectsPage(ctx context.Context, page int) ([]domain.Project, bool, error) {
 	// Sort by last push time - most recently updated first
-	url := fmt.Sprintf("%s/user/repos?per_page=100&page=%d&sort=pushed&direction=desc", c.baseURL, page)
+	url := fmt.Sprintf("%s/user/repos?per_page=%d&page=%d&sort=pushed&direction=desc", c.baseURL, DefaultPageSize, page)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
