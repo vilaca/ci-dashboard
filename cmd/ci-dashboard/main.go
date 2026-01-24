@@ -1,9 +1,13 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/vilaca/ci-dashboard/internal/api"
@@ -27,7 +31,6 @@ func main() {
 	// Start background refresher to pre-populate and maintain cache
 	if refresher != nil {
 		refresher.Start()
-		defer refresher.Stop()
 	}
 
 	// Start server
@@ -40,7 +43,7 @@ func main() {
 	if cfg.HasGitLabConfig() {
 		log.Printf("GitLab: ENABLED")
 		log.Printf("  URL: %s", cfg.GitLabURL)
-		log.Printf("  Cache TTL: %ds (30 min)", cfg.GitLabCacheDurationSeconds)
+		log.Printf("  Cache TTL: %ds", cfg.GitLabCacheDurationSeconds)
 		if cfg.GitLabCurrentUser != "" {
 			log.Printf("  Current user: %s", cfg.GitLabCurrentUser)
 		}
@@ -56,7 +59,7 @@ func main() {
 	if cfg.HasGitHubConfig() {
 		log.Printf("GitHub: ENABLED")
 		log.Printf("  URL: %s", cfg.GitHubURL)
-		log.Printf("  Cache TTL: %ds (30 min)", cfg.GitHubCacheDurationSeconds)
+		log.Printf("  Cache TTL: %ds", cfg.GitHubCacheDurationSeconds)
 		if cfg.GitHubCurrentUser != "" {
 			log.Printf("  Current user: %s", cfg.GitHubCurrentUser)
 		}
@@ -75,9 +78,41 @@ func main() {
 	log.Printf("==================================")
 	log.Printf("Server starting...")
 
-	if err := http.ListenAndServe(addr, server); err != nil {
-		log.Fatalf("Server failed: %v", err)
+	// Create HTTP server with graceful shutdown support
+	httpServer := &http.Server{
+		Addr:    addr,
+		Handler: server,
 	}
+
+	// Start server in goroutine
+	go func() {
+		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Server failed: %v", err)
+		}
+	}()
+
+	// Setup signal handling for graceful shutdown
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
+	// Wait for shutdown signal
+	<-sigChan
+	log.Printf("Shutdown signal received, shutting down gracefully...")
+
+	// Stop background refresher first
+	if refresher != nil {
+		refresher.Stop()
+	}
+
+	// Shutdown HTTP server with timeout
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := httpServer.Shutdown(shutdownCtx); err != nil {
+		log.Printf("Server shutdown error: %v", err)
+	}
+
+	log.Printf("Server stopped")
 }
 
 // buildServer wires up all dependencies and returns the configured HTTP handler and background refresher.
@@ -106,9 +141,9 @@ func buildServer(cfg *config.Config) (http.Handler, *service.BackgroundRefresher
 
 		// Wrap with stale-while-revalidate caching layer
 		// TTL: how long data is considered fresh
-		// StaleTTL: how long to serve stale data (24 hours)
+		// StaleTTL: how long to serve stale data
 		cacheDuration := time.Duration(cfg.GitLabCacheDurationSeconds) * time.Second
-		staleTTL := 24 * time.Hour
+		staleTTL := time.Duration(cfg.StaleCacheTTLSeconds) * time.Second
 		cachedGitLabClient := api.NewStaleCachingClient(gitlabClient, cacheDuration, staleTTL)
 		pipelineService.RegisterClient("gitlab", cachedGitLabClient)
 	}
@@ -121,20 +156,29 @@ func buildServer(cfg *config.Config) (http.Handler, *service.BackgroundRefresher
 
 		// Wrap with stale-while-revalidate caching layer
 		cacheDuration := time.Duration(cfg.GitHubCacheDurationSeconds) * time.Second
-		staleTTL := 24 * time.Hour
+		staleTTL := time.Duration(cfg.StaleCacheTTLSeconds) * time.Second
 		cachedGitHubClient := api.NewStaleCachingClient(githubClient, cacheDuration, staleTTL)
 		pipelineService.RegisterClient("github", cachedGitHubClient)
 	}
 
 	// Create handler with dependencies (Dependency Injection)
-	handler := dashboard.NewHandler(renderer, logger, pipelineService, cfg.RunsPerRepository, cfg.RecentPipelinesLimit, cfg.UIRefreshIntervalSeconds, cfg.GitLabCurrentUser, cfg.GitHubCurrentUser)
+	handler := dashboard.NewHandler(dashboard.HandlerConfig{
+		Renderer:          renderer,
+		Logger:            logger,
+		PipelineService:   pipelineService,
+		RunsPerRepo:       cfg.RunsPerRepository,
+		RecentLimit:       cfg.RecentPipelinesLimit,
+		UIRefreshInterval: cfg.UIRefreshIntervalSeconds,
+		GitLabUser:        cfg.GitLabCurrentUser,
+		GitHubUser:        cfg.GitHubCurrentUser,
+	})
 
 	// Register routes
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 
 	// Create background refresher to pre-populate and maintain cache
-	refreshInterval := 5 * time.Minute
+	refreshInterval := time.Duration(cfg.BackgroundRefreshIntervalSeconds) * time.Second
 	refresher := service.NewBackgroundRefresher(pipelineService, refreshInterval, logger)
 
 	return mux, refresher

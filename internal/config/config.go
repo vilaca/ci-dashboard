@@ -34,6 +34,10 @@ type Config struct {
 	// Cache configuration
 	GitLabCacheDurationSeconds int // Duration to cache GitLab API responses (default: 1800 = 30 minutes)
 	GitHubCacheDurationSeconds int // Duration to cache GitHub API responses (default: 1800 = 30 minutes)
+	StaleCacheTTLSeconds       int // How long to serve stale cache data (default: 86400 = 24 hours)
+
+	// Background refresh configuration
+	BackgroundRefreshIntervalSeconds int // How often to refresh all caches in background (default: 300 = 5 minutes)
 
 	// UI configuration
 	UIRefreshIntervalSeconds int // How often UI auto-refreshes data in seconds (default: 5)
@@ -64,6 +68,12 @@ type yamlConfig struct {
 		RunsPerRepository    int `yaml:"runs_per_repository"`
 		RecentPipelinesLimit int `yaml:"recent_pipelines_limit"`
 	} `yaml:"display"`
+	Cache struct {
+		StaleTTLSeconds int `yaml:"stale_ttl_seconds"`
+	} `yaml:"cache"`
+	Background struct {
+		RefreshIntervalSeconds int `yaml:"refresh_interval_seconds"`
+	} `yaml:"background"`
 	UI struct {
 		RefreshIntervalSeconds int `yaml:"refresh_interval_seconds"`
 	} `yaml:"ui"`
@@ -211,21 +221,41 @@ func Load() (*Config, error) {
 		uiRefreshInterval = yc.UI.RefreshIntervalSeconds
 	}
 
+	staleCacheTTL := 86400 // 24 hours default
+	if ttlStr := os.Getenv("STALE_CACHE_TTL_SECONDS"); ttlStr != "" {
+		if t, err := strconv.Atoi(ttlStr); err == nil && t > 0 {
+			staleCacheTTL = t
+		}
+	} else if yc.Cache.StaleTTLSeconds != 0 {
+		staleCacheTTL = yc.Cache.StaleTTLSeconds
+	}
+
+	backgroundRefreshInterval := 300 // 5 minutes default
+	if intervalStr := os.Getenv("BACKGROUND_REFRESH_INTERVAL_SECONDS"); intervalStr != "" {
+		if i, err := strconv.Atoi(intervalStr); err == nil && i > 0 {
+			backgroundRefreshInterval = i
+		}
+	} else if yc.Background.RefreshIntervalSeconds != 0 {
+		backgroundRefreshInterval = yc.Background.RefreshIntervalSeconds
+	}
+
 	return &Config{
-		Port:                       port,
-		GitLabURL:                  gitlabURL,
-		GitLabToken:                gitlabToken,
-		GitHubURL:                  githubURL,
-		GitHubToken:                githubToken,
-		GitLabWatchedRepos:         gitlabWatchedRepos,
-		GitHubWatchedRepos:         githubWatchedRepos,
-		RunsPerRepository:          runsPerRepo,
-		RecentPipelinesLimit:       recentLimit,
-		GitLabCacheDurationSeconds: gitlabCacheDuration,
-		GitHubCacheDurationSeconds: githubCacheDuration,
-		UIRefreshIntervalSeconds:   uiRefreshInterval,
-		GitLabCurrentUser:          gitlabCurrentUser,
-		GitHubCurrentUser:          githubCurrentUser,
+		Port:                             port,
+		GitLabURL:                        gitlabURL,
+		GitLabToken:                      gitlabToken,
+		GitHubURL:                        githubURL,
+		GitHubToken:                      githubToken,
+		GitLabWatchedRepos:               gitlabWatchedRepos,
+		GitHubWatchedRepos:               githubWatchedRepos,
+		RunsPerRepository:                runsPerRepo,
+		RecentPipelinesLimit:             recentLimit,
+		GitLabCacheDurationSeconds:       gitlabCacheDuration,
+		GitHubCacheDurationSeconds:       githubCacheDuration,
+		StaleCacheTTLSeconds:             staleCacheTTL,
+		BackgroundRefreshIntervalSeconds: backgroundRefreshInterval,
+		UIRefreshIntervalSeconds:         uiRefreshInterval,
+		GitLabCurrentUser:                gitlabCurrentUser,
+		GitHubCurrentUser:                githubCurrentUser,
 	}, nil
 }
 

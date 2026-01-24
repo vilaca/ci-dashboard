@@ -17,6 +17,12 @@ import (
 	"github.com/vilaca/ci-dashboard/internal/service"
 )
 
+// avatarCacheEntry stores avatar data with expiration time
+type avatarCacheEntry struct {
+	data      []byte
+	expiresAt time.Time
+}
+
 // Handler handles HTTP requests for the dashboard.
 // Each handler method has a Single Responsibility (SRP).
 type Handler struct {
@@ -28,7 +34,7 @@ type Handler struct {
 	uiRefreshInterval   int
 	gitlabCurrentUser   string
 	githubCurrentUser   string
-	avatarCache         map[string][]byte // platform:username -> image data
+	avatarCache         map[string]*avatarCacheEntry // platform:username -> cached data with TTL
 	avatarCacheMu       sync.RWMutex
 }
 
@@ -61,20 +67,37 @@ type PipelineService interface {
 // RepositoryWithRuns is imported from service package
 type RepositoryWithRuns = service.RepositoryWithRuns
 
+// HandlerConfig holds configuration for creating a new Handler
+type HandlerConfig struct {
+	Renderer          Renderer
+	Logger            Logger
+	PipelineService   PipelineService
+	RunsPerRepo       int
+	RecentLimit       int
+	UIRefreshInterval int
+	GitLabUser        string
+	GitHubUser        string
+}
+
 // NewHandler creates a new Handler with injected dependencies (Dependency Inversion Principle).
 // This follows IoC (Inversion of Control) by accepting dependencies rather than creating them.
-func NewHandler(renderer Renderer, logger Logger, pipelineService PipelineService, runsPerRepo, recentLimit, uiRefreshInterval int, gitlabCurrentUser, githubCurrentUser string) *Handler {
-	return &Handler{
-		renderer:          renderer,
-		logger:            logger,
-		pipelineService:   pipelineService,
-		runsPerRepo:       runsPerRepo,
-		recentLimit:       recentLimit,
-		uiRefreshInterval: uiRefreshInterval,
-		gitlabCurrentUser: gitlabCurrentUser,
-		githubCurrentUser: githubCurrentUser,
-		avatarCache:       make(map[string][]byte),
+func NewHandler(cfg HandlerConfig) *Handler {
+	h := &Handler{
+		renderer:          cfg.Renderer,
+		logger:            cfg.Logger,
+		pipelineService:   cfg.PipelineService,
+		runsPerRepo:       cfg.RunsPerRepo,
+		recentLimit:       cfg.RecentLimit,
+		uiRefreshInterval: cfg.UIRefreshInterval,
+		gitlabCurrentUser: cfg.GitLabUser,
+		githubCurrentUser: cfg.GitHubUser,
+		avatarCache:       make(map[string]*avatarCacheEntry),
 	}
+
+	// Start background cleanup goroutine for avatar cache (runs every hour)
+	go h.cleanupAvatarCache(1 * time.Hour)
+
+	return h
 }
 
 // RegisterRoutes registers all HTTP routes.
@@ -362,14 +385,26 @@ func (h *Handler) handleAvatar(w http.ResponseWriter, r *http.Request) {
 
 	// Get from cache
 	h.avatarCacheMu.RLock()
-	imageData, found := h.avatarCache[cacheKey]
+	entry, found := h.avatarCache[cacheKey]
 	h.avatarCacheMu.RUnlock()
 
-	if !found {
+	if !found || entry == nil {
 		// Avatar not cached yet - return placeholder or 404
 		http.Error(w, "Avatar not cached yet", http.StatusNotFound)
 		return
 	}
+
+	// Check if expired
+	if time.Now().After(entry.expiresAt) {
+		// Expired - remove from cache and return 404
+		h.avatarCacheMu.Lock()
+		delete(h.avatarCache, cacheKey)
+		h.avatarCacheMu.Unlock()
+		http.Error(w, "Avatar expired", http.StatusNotFound)
+		return
+	}
+
+	imageData := entry.data
 
 	// Detect image type from content
 	contentType := "image/png"
@@ -458,12 +493,38 @@ func (h *Handler) cacheAvatar(platform, username, email, avatarURL string) {
 		return
 	}
 
-	// Store in cache
+	// Store in cache with 24 hour TTL
 	h.avatarCacheMu.Lock()
-	h.avatarCache[cacheKey] = imageData
+	h.avatarCache[cacheKey] = &avatarCacheEntry{
+		data:      imageData,
+		expiresAt: time.Now().Add(24 * time.Hour),
+	}
 	h.avatarCacheMu.Unlock()
 
 	h.logger.Printf("cached avatar for %s (%s)", username, platform)
+}
+
+// cleanupAvatarCache periodically removes expired entries from avatar cache
+func (h *Handler) cleanupAvatarCache(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		h.avatarCacheMu.Lock()
+		now := time.Now()
+		removed := 0
+		for key, entry := range h.avatarCache {
+			if entry != nil && now.After(entry.expiresAt) {
+				delete(h.avatarCache, key)
+				removed++
+			}
+		}
+		h.avatarCacheMu.Unlock()
+
+		if removed > 0 {
+			h.logger.Printf("cleaned up %d expired avatar(s) from cache", removed)
+		}
+	}
 }
 
 // getGravatarURL generates a Gravatar URL from an email address.
