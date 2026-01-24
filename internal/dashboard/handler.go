@@ -295,17 +295,13 @@ func (h *Handler) handleRepositoryDetailAPI(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	h.logger.Printf("[RepositoryDetail] Fetching data for repository ID: %s", repositoryID)
-
 	// Get all projects to find the specific one (from cache)
 	projects, err := h.pipelineService.GetAllProjects(r.Context())
 	if err != nil {
-		h.logger.Printf("[RepositoryDetail] ERROR: failed to get projects: %v", err)
+		h.logger.Printf("[RepositoryDetail] failed to get projects: %v", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
-
-	h.logger.Printf("[RepositoryDetail] Found %d projects in cache", len(projects))
 
 	// Find the project by ID
 	var project *domain.Project
@@ -317,21 +313,17 @@ func (h *Handler) handleRepositoryDetailAPI(w http.ResponseWriter, r *http.Reque
 	}
 
 	if project == nil {
-		h.logger.Printf("[RepositoryDetail] ERROR: Repository not found with ID: %s", repositoryID)
+		h.logger.Printf("[RepositoryDetail] repository not found: %s", repositoryID)
 		http.Error(w, "Repository not found", http.StatusNotFound)
 		return
 	}
 
-	h.logger.Printf("[RepositoryDetail] Found project: %s (platform: %s)", project.Name, project.Platform)
-
 	// Get pipelines for this specific project (from cache)
 	pipelines, err := h.pipelineService.GetPipelinesForProject(r.Context(), repositoryID, 50)
 	if err != nil {
-		h.logger.Printf("[RepositoryDetail] ERROR: failed to get pipelines for project %s: %v", repositoryID, err)
+		h.logger.Printf("[RepositoryDetail] failed to get pipelines for %s: %v", repositoryID, err)
 		// Continue with empty pipelines
 		pipelines = []domain.Pipeline{}
-	} else {
-		h.logger.Printf("[RepositoryDetail] Found %d pipelines for project %s", len(pipelines), repositoryID)
 	}
 
 	// Fill in repository name from project
@@ -409,17 +401,13 @@ func (h *Handler) handleRepositoryDetailAPI(w http.ResponseWriter, r *http.Reque
 
 	wg.Wait()
 
-	h.logger.Printf("[RepositoryDetail] Final counts: %d runs, %d MRs, %d issues", len(repository.Runs), len(repoMRs), len(repoIssues))
-
 	// Render to a buffer to get HTML string
 	var buf strings.Builder
 	if err := h.renderer.RenderRepositoryDetail(&buf, repository, repoMRs, repoIssues); err != nil {
-		h.logger.Printf("[RepositoryDetail] ERROR: failed to render: %v", err)
+		h.logger.Printf("[RepositoryDetail] failed to render: %v", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
-
-	h.logger.Printf("[RepositoryDetail] Successfully rendered %d bytes of HTML", buf.Len())
 
 	// Return as JSON
 	w.Header().Set("Content-Type", "application/json")

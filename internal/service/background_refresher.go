@@ -121,7 +121,8 @@ func (r *BackgroundRefresher) refreshData() {
 
 	// Fetch repositories with recent runs - this sorts by most recent activity
 	// This ensures we prioritize active repositories (fetched in order of most recent commits)
-	reposWithRuns, err := r.pipelineService.GetRepositoriesWithRecentRuns(ctx, 3)
+	// Fetch 50 pipelines per repo to populate cache for repository detail pages
+	reposWithRuns, err := r.pipelineService.GetRepositoriesWithRecentRuns(ctx, 50)
 	if err != nil {
 		r.logger.Printf("Background refresher: Failed to fetch repositories with runs: %v", err)
 	}
