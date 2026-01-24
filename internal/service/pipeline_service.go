@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -452,6 +453,12 @@ func (s *PipelineService) GetAllProjects(ctx context.Context) ([]domain.Project,
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	return s.getAllProjectsLocked(ctx)
+}
+
+// getAllProjectsLocked is an internal helper that assumes the caller holds s.mu (read or write lock).
+// This prevents deadlock when called from other methods that already hold the lock.
+func (s *PipelineService) getAllProjectsLocked(ctx context.Context) ([]domain.Project, error) {
 	var allProjects []domain.Project
 	var mu sync.Mutex
 	var wg sync.WaitGroup
@@ -650,19 +657,12 @@ func (s *PipelineService) GetRepositoriesWithRecentRuns(ctx context.Context, run
 
 	// Sort repositories by latest run time (most recent first)
 	// Repositories with no runs appear at the end
-	for i := 0; i < len(results)-1; i++ {
-		for j := 0; j < len(results)-i-1; j++ {
-			// Get latest run time for repository j
-			timeJ := getLatestRunTime(results[j])
-			// Get latest run time for repository j+1
-			timeJPlus1 := getLatestRunTime(results[j+1])
-
-			// Sort: most recent first (later time comes before earlier time)
-			if timeJ.Before(timeJPlus1) {
-				results[j], results[j+1] = results[j+1], results[j]
-			}
-		}
-	}
+	sort.Slice(results, func(i, j int) bool {
+		timeI := getLatestRunTime(results[i])
+		timeJ := getLatestRunTime(results[j])
+		// Sort: most recent first (later time comes before earlier time)
+		return timeI.After(timeJ)
+	})
 
 	return results, nil
 }
@@ -729,14 +729,9 @@ func (s *PipelineService) GetRecentPipelines(ctx context.Context, totalLimit int
 	wg.Wait()
 
 	// Sort by UpdatedAt (most recent first)
-	// Simple bubble sort for now
-	for i := 0; i < len(allPipelines)-1; i++ {
-		for j := 0; j < len(allPipelines)-i-1; j++ {
-			if allPipelines[j].UpdatedAt.Before(allPipelines[j+1].UpdatedAt) {
-				allPipelines[j], allPipelines[j+1] = allPipelines[j+1], allPipelines[j]
-			}
-		}
-	}
+	sort.Slice(allPipelines, func(i, j int) bool {
+		return allPipelines[i].UpdatedAt.After(allPipelines[j].UpdatedAt)
+	})
 
 	// Limit to totalLimit
 	if len(allPipelines) > totalLimit {
@@ -751,8 +746,8 @@ func (s *PipelineService) GetAllMergeRequests(ctx context.Context) ([]domain.Mer
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// Get all projects first
-	projects, err := s.GetAllProjects(ctx)
+	// Get all projects first (using internal locked version to avoid deadlock)
+	projects, err := s.getAllProjectsLocked(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -813,19 +808,16 @@ func (s *PipelineService) GetAllMergeRequests(ctx context.Context) ([]domain.Mer
 	for r := range results {
 		if r.err != nil {
 			// Log error but continue with other projects
+			fmt.Printf("Error fetching merge requests: %v\n", r.err)
 			continue
 		}
 		allMRs = append(allMRs, r.mrs...)
 	}
 
 	// Sort by updated time (most recent first)
-	for i := 0; i < len(allMRs)-1; i++ {
-		for j := 0; j < len(allMRs)-i-1; j++ {
-			if allMRs[j].UpdatedAt.Before(allMRs[j+1].UpdatedAt) {
-				allMRs[j], allMRs[j+1] = allMRs[j+1], allMRs[j]
-			}
-		}
-	}
+	sort.Slice(allMRs, func(i, j int) bool {
+		return allMRs[i].UpdatedAt.After(allMRs[j].UpdatedAt)
+	})
 
 	return allMRs, nil
 }
@@ -911,8 +903,8 @@ func (s *PipelineService) GetAllIssues(ctx context.Context) ([]domain.Issue, err
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// Get all projects first
-	projects, err := s.GetAllProjects(ctx)
+	// Get all projects first (using internal locked version to avoid deadlock)
+	projects, err := s.getAllProjectsLocked(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -973,19 +965,16 @@ func (s *PipelineService) GetAllIssues(ctx context.Context) ([]domain.Issue, err
 	for r := range results {
 		if r.err != nil {
 			// Log error but continue with other projects
+			fmt.Printf("Error fetching issues: %v\n", r.err)
 			continue
 		}
 		allIssues = append(allIssues, r.issues...)
 	}
 
 	// Sort by updated time (most recent first)
-	for i := 0; i < len(allIssues)-1; i++ {
-		for j := 0; j < len(allIssues)-i-1; j++ {
-			if allIssues[j].UpdatedAt.Before(allIssues[j+1].UpdatedAt) {
-				allIssues[j], allIssues[j+1] = allIssues[j+1], allIssues[j]
-			}
-		}
-	}
+	sort.Slice(allIssues, func(i, j int) bool {
+		return allIssues[i].UpdatedAt.After(allIssues[j].UpdatedAt)
+	})
 
 	return allIssues, nil
 }
@@ -995,8 +984,8 @@ func (s *PipelineService) GetAllBranches(ctx context.Context, limit int) ([]doma
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// Get all projects first
-	projects, err := s.GetAllProjects(ctx)
+	// Get all projects first (using internal locked version to avoid deadlock)
+	projects, err := s.getAllProjectsLocked(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1045,19 +1034,16 @@ func (s *PipelineService) GetAllBranches(ctx context.Context, limit int) ([]doma
 	var allBranches []domain.Branch
 	for r := range results {
 		if r.err != nil {
+			fmt.Printf("Error fetching branches: %v\n", r.err)
 			continue
 		}
 		allBranches = append(allBranches, r.branches...)
 	}
 
 	// Sort by last commit date (most recent first)
-	for i := 0; i < len(allBranches)-1; i++ {
-		for j := 0; j < len(allBranches)-i-1; j++ {
-			if allBranches[j].LastCommitDate.Before(allBranches[j+1].LastCommitDate) {
-				allBranches[j], allBranches[j+1] = allBranches[j+1], allBranches[j]
-			}
-		}
-	}
+	sort.Slice(allBranches, func(i, j int) bool {
+		return allBranches[i].LastCommitDate.After(allBranches[j].LastCommitDate)
+	})
 
 	return allBranches, nil
 }
@@ -1101,13 +1087,9 @@ func (s *PipelineService) GetBranchesWithPipelines(ctx context.Context, limit in
 	wg.Wait()
 
 	// Sort by branch commit date (most recent first)
-	for i := 0; i < len(results)-1; i++ {
-		for j := 0; j < len(results)-i-1; j++ {
-			if results[j].Branch.LastCommitDate.Before(results[j+1].Branch.LastCommitDate) {
-				results[j], results[j+1] = results[j+1], results[j]
-			}
-		}
-	}
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Branch.LastCommitDate.After(results[j].Branch.LastCommitDate)
+	})
 
 	return results, nil
 }

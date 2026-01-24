@@ -246,7 +246,11 @@ func (c *StaleCachingClient) GetProjects(ctx context.Context) ([]domain.Project,
 
 	// Try cache first (even if stale)
 	if cached, _, found := c.cache.Get(key); found {
-		return cached.([]domain.Project), nil
+		if projects, ok := cached.([]domain.Project); ok {
+			return projects, nil
+		}
+		// Type assertion failed - cache corrupted, return empty
+		return []domain.Project{}, fmt.Errorf("cache type mismatch for key %s", key)
 	}
 
 	// Cache miss - return empty (background will populate)
@@ -259,7 +263,11 @@ func (c *StaleCachingClient) GetLatestPipeline(ctx context.Context, projectID, b
 
 	// Try cache first (even if stale)
 	if cached, _, found := c.cache.Get(key); found {
-		return cached.(*domain.Pipeline), nil
+		if pipeline, ok := cached.(*domain.Pipeline); ok {
+			return pipeline, nil
+		}
+		// Type assertion failed - cache corrupted, return nil
+		return nil, fmt.Errorf("cache type mismatch for key %s", key)
 	}
 
 	// Cache miss - return nil (background will populate)
@@ -275,7 +283,11 @@ func (c *StaleCachingClient) GetProjectCount(ctx context.Context) (int, error) {
 	key := "GetProjectCount"
 
 	if cached, _, found := c.cache.Get(key); found {
-		return cached.(int), nil
+		if count, ok := cached.(int); ok {
+			return count, nil
+		}
+		// Type assertion failed - cache corrupted, return 0
+		return 0, fmt.Errorf("cache type mismatch for key %s", key)
 	}
 
 	// Cache miss - return 0 (background will populate)
@@ -286,7 +298,11 @@ func (c *StaleCachingClient) GetPipelines(ctx context.Context, projectID string,
 	key := fmt.Sprintf("GetPipelines:%s:%d", projectID, limit)
 
 	if cached, _, found := c.cache.Get(key); found {
-		return cached.([]domain.Pipeline), nil
+		if pipelines, ok := cached.([]domain.Pipeline); ok {
+			return pipelines, nil
+		}
+		// Type assertion failed - cache corrupted, return empty
+		return []domain.Pipeline{}, fmt.Errorf("cache type mismatch for key %s", key)
 	}
 
 	// Cache miss - return empty (background will populate)
@@ -297,7 +313,11 @@ func (c *StaleCachingClient) GetBranches(ctx context.Context, projectID string, 
 	key := fmt.Sprintf("GetBranches:%s:%d", projectID, limit)
 
 	if cached, _, found := c.cache.Get(key); found {
-		return cached.([]domain.Branch), nil
+		if branches, ok := cached.([]domain.Branch); ok {
+			return branches, nil
+		}
+		// Type assertion failed - cache corrupted, return empty
+		return []domain.Branch{}, fmt.Errorf("cache type mismatch for key %s", key)
 	}
 
 	// Cache miss - return empty (background will populate)
@@ -313,7 +333,11 @@ func (c *StaleCachingClient) GetMergeRequests(ctx context.Context, projectID str
 	key := fmt.Sprintf("GetMergeRequests:%s", projectID)
 
 	if cached, _, found := c.cache.Get(key); found {
-		return cached.([]domain.MergeRequest), nil
+		if mrs, ok := cached.([]domain.MergeRequest); ok {
+			return mrs, nil
+		}
+		// Type assertion failed - cache corrupted, return empty
+		return []domain.MergeRequest{}, fmt.Errorf("cache type mismatch for key %s", key)
 	}
 
 	// Cache miss - return empty (background will populate)
@@ -329,7 +353,11 @@ func (c *StaleCachingClient) GetIssues(ctx context.Context, projectID string) ([
 	key := fmt.Sprintf("GetIssues:%s", projectID)
 
 	if cached, _, found := c.cache.Get(key); found {
-		return cached.([]domain.Issue), nil
+		if issues, ok := cached.([]domain.Issue); ok {
+			return issues, nil
+		}
+		// Type assertion failed - cache corrupted, return empty
+		return []domain.Issue{}, fmt.Errorf("cache type mismatch for key %s", key)
 	}
 
 	// Cache miss - return empty (background will populate)
@@ -345,7 +373,11 @@ func (c *StaleCachingClient) GetCurrentUser(ctx context.Context) (*domain.UserPr
 	key := "GetCurrentUser"
 
 	if cached, _, found := c.cache.Get(key); found {
-		return cached.(*domain.UserProfile), nil
+		if user, ok := cached.(*domain.UserProfile); ok {
+			return user, nil
+		}
+		// Type assertion failed - cache corrupted, return nil
+		return nil, fmt.Errorf("cache type mismatch for key %s", key)
 	}
 
 	// Cache miss - return nil (background will populate)

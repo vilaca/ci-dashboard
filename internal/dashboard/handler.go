@@ -36,6 +36,7 @@ type Handler struct {
 	githubCurrentUser   string
 	avatarCache         map[string]*avatarCacheEntry // platform:username -> cached data with TTL
 	avatarCacheMu       sync.RWMutex
+	stopAvatarCleanup   chan struct{} // channel to stop avatar cache cleanup goroutine
 }
 
 // Logger interface for logging operations (Interface Segregation Principle).
@@ -93,12 +94,18 @@ func NewHandler(cfg HandlerConfig) *Handler {
 		gitlabCurrentUser: cfg.GitLabUser,
 		githubCurrentUser: cfg.GitHubUser,
 		avatarCache:       make(map[string]*avatarCacheEntry),
+		stopAvatarCleanup: make(chan struct{}),
 	}
 
 	// Start background cleanup goroutine for avatar cache (runs every hour)
 	go h.cleanupAvatarCache(1 * time.Hour)
 
 	return h
+}
+
+// Stop gracefully stops the handler's background goroutines
+func (h *Handler) Stop() {
+	close(h.stopAvatarCleanup)
 }
 
 // RegisterRoutes registers all HTTP routes.
@@ -581,20 +588,26 @@ func (h *Handler) cleanupAvatarCache(interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		h.avatarCacheMu.Lock()
-		now := time.Now()
-		removed := 0
-		for key, entry := range h.avatarCache {
-			if entry != nil && now.After(entry.expiresAt) {
-				delete(h.avatarCache, key)
-				removed++
+	for {
+		select {
+		case <-ticker.C:
+			h.avatarCacheMu.Lock()
+			now := time.Now()
+			removed := 0
+			for key, entry := range h.avatarCache {
+				if entry != nil && now.After(entry.expiresAt) {
+					delete(h.avatarCache, key)
+					removed++
+				}
 			}
-		}
-		h.avatarCacheMu.Unlock()
+			h.avatarCacheMu.Unlock()
 
-		if removed > 0 {
-			h.logger.Printf("cleaned up %d expired avatar(s) from cache", removed)
+			if removed > 0 {
+				h.logger.Printf("cleaned up %d expired avatar(s) from cache", removed)
+			}
+		case <-h.stopAvatarCleanup:
+			h.logger.Printf("avatar cache cleanup goroutine stopping")
+			return
 		}
 	}
 }

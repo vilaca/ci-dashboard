@@ -26,7 +26,7 @@ func main() {
 	}
 
 	// Wire up dependencies (Dependency Injection / IoC)
-	server, refresher := buildServer(cfg)
+	server, handler, refresher := buildServer(cfg)
 
 	// Start background refresher to pre-populate and maintain cache
 	if refresher != nil {
@@ -104,6 +104,11 @@ func main() {
 		refresher.Stop()
 	}
 
+	// Stop handler background goroutines
+	if handler != nil {
+		handler.Stop()
+	}
+
 	// Shutdown HTTP server with timeout
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -115,10 +120,10 @@ func main() {
 	log.Printf("Server stopped")
 }
 
-// buildServer wires up all dependencies and returns the configured HTTP handler and background refresher.
+// buildServer wires up all dependencies and returns the configured HTTP handler, dashboard handler, and background refresher.
 // This is the composition root where all dependencies are created and injected.
 // Follows SOLID principles and IoC (Inversion of Control).
-func buildServer(cfg *config.Config) (http.Handler, *service.BackgroundRefresher) {
+func buildServer(cfg *config.Config) (http.Handler, *dashboard.Handler, *service.BackgroundRefresher) {
 	// Create shared dependencies
 	logger := dashboard.NewStdLogger()
 	renderer := dashboard.NewHTMLRenderer()
@@ -181,5 +186,5 @@ func buildServer(cfg *config.Config) (http.Handler, *service.BackgroundRefresher
 	refreshInterval := time.Duration(cfg.BackgroundRefreshIntervalSeconds) * time.Second
 	refresher := service.NewBackgroundRefresher(pipelineService, refreshInterval, logger)
 
-	return mux, refresher
+	return mux, handler, refresher
 }
