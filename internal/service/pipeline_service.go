@@ -544,7 +544,7 @@ func (s *PipelineService) GetProjectsPageByPlatform(ctx context.Context, platfor
 	}
 
 	if len(whitelist) > 0 {
-		filtered := make([]domain.Project, 0)
+		filtered := make([]domain.Project, 0, len(projects))
 		for _, project := range projects {
 			if s.isWhitelisted(project) {
 				filtered = append(filtered, project)
@@ -600,7 +600,7 @@ func (s *PipelineService) getAllProjectsLocked(ctx context.Context) ([]domain.Pr
 
 	// Filter projects based on whitelist
 	if len(s.gitlabWhitelist) > 0 || len(s.githubWhitelist) > 0 {
-		filtered := make([]domain.Project, 0)
+		filtered := make([]domain.Project, 0, len(allProjects))
 		for _, project := range allProjects {
 			if s.isWhitelisted(project) {
 				filtered = append(filtered, project)

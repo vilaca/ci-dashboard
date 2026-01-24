@@ -260,15 +260,23 @@ func getCached[T any](cache *StaleCache, key string, defaultValue T) (T, bool) {
 // GetProjects retrieves projects with stale-while-revalidate caching.
 func (c *StaleCachingClient) GetProjects(ctx context.Context) ([]domain.Project, error) {
 	key := "GetProjects"
-	projects, _ := getCached(c.cache, key, []domain.Project{})
-	return projects, nil
+	projects, found := getCached(c.cache, key, []domain.Project{})
+	if found {
+		return projects, nil
+	}
+	// Cache miss - fetch from underlying client
+	return c.client.GetProjects(ctx)
 }
 
 // GetLatestPipeline retrieves the latest pipeline with stale-while-revalidate caching.
 func (c *StaleCachingClient) GetLatestPipeline(ctx context.Context, projectID, branch string) (*domain.Pipeline, error) {
 	key := fmt.Sprintf("GetLatestPipeline:%s:%s", projectID, branch)
-	pipeline, _ := getCached(c.cache, key, (*domain.Pipeline)(nil))
-	return pipeline, nil
+	pipeline, found := getCached(c.cache, key, (*domain.Pipeline)(nil))
+	if found {
+		return pipeline, nil
+	}
+	// Cache miss - fetch from underlying client
+	return c.client.GetLatestPipeline(ctx, projectID, branch)
 }
 
 // Implement other Client methods...
@@ -278,20 +286,32 @@ func (c *StaleCachingClient) GetProjectsPage(ctx context.Context, page int) ([]d
 
 func (c *StaleCachingClient) GetProjectCount(ctx context.Context) (int, error) {
 	key := "GetProjectCount"
-	count, _ := getCached(c.cache, key, 0)
-	return count, nil
+	count, found := getCached(c.cache, key, 0)
+	if found {
+		return count, nil
+	}
+	// Cache miss - fetch from underlying client
+	return c.client.GetProjectCount(ctx)
 }
 
 func (c *StaleCachingClient) GetPipelines(ctx context.Context, projectID string, limit int) ([]domain.Pipeline, error) {
 	key := fmt.Sprintf("GetPipelines:%s:%d", projectID, limit)
-	pipelines, _ := getCached(c.cache, key, []domain.Pipeline{})
-	return pipelines, nil
+	pipelines, found := getCached(c.cache, key, []domain.Pipeline{})
+	if found {
+		return pipelines, nil
+	}
+	// Cache miss - fetch from underlying client
+	return c.client.GetPipelines(ctx, projectID, limit)
 }
 
 func (c *StaleCachingClient) GetBranches(ctx context.Context, projectID string, limit int) ([]domain.Branch, error) {
 	key := fmt.Sprintf("GetBranches:%s:%d", projectID, limit)
-	branches, _ := getCached(c.cache, key, []domain.Branch{})
-	return branches, nil
+	branches, found := getCached(c.cache, key, []domain.Branch{})
+	if found {
+		return branches, nil
+	}
+	// Cache miss - fetch from underlying client
+	return c.client.GetBranches(ctx, projectID, limit)
 }
 
 // GetMergeRequests with caching
@@ -301,8 +321,12 @@ func (c *StaleCachingClient) GetMergeRequests(ctx context.Context, projectID str
 	}
 
 	key := fmt.Sprintf("GetMergeRequests:%s", projectID)
-	mrs, _ := getCached(c.cache, key, []domain.MergeRequest{})
-	return mrs, nil
+	mrs, found := getCached(c.cache, key, []domain.MergeRequest{})
+	if found {
+		return mrs, nil
+	}
+	// Cache miss - fetch from underlying client
+	return c.extendedClient.GetMergeRequests(ctx, projectID)
 }
 
 // GetIssues with caching
@@ -312,8 +336,12 @@ func (c *StaleCachingClient) GetIssues(ctx context.Context, projectID string) ([
 	}
 
 	key := fmt.Sprintf("GetIssues:%s", projectID)
-	issues, _ := getCached(c.cache, key, []domain.Issue{})
-	return issues, nil
+	issues, found := getCached(c.cache, key, []domain.Issue{})
+	if found {
+		return issues, nil
+	}
+	// Cache miss - fetch from underlying client
+	return c.extendedClient.GetIssues(ctx, projectID)
 }
 
 // GetCurrentUser with caching
@@ -323,8 +351,12 @@ func (c *StaleCachingClient) GetCurrentUser(ctx context.Context) (*domain.UserPr
 	}
 
 	key := "GetCurrentUser"
-	user, _ := getCached(c.cache, key, (*domain.UserProfile)(nil))
-	return user, nil
+	user, found := getCached(c.cache, key, (*domain.UserProfile)(nil))
+	if found {
+		return user, nil
+	}
+	// Cache miss - fetch from underlying client
+	return c.userClient.GetCurrentUser(ctx)
 }
 
 // GetEvents retrieves recent events (NOT cached - always fresh for event polling).

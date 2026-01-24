@@ -112,7 +112,9 @@ func (c *Client) GetProjectCount(ctx context.Context) (int, error) {
 						end++
 					}
 					if end > start {
-						fmt.Sscanf(link[start:end], "%d", &lastPage)
+						if _, err := fmt.Sscanf(link[start:end], "%d", &lastPage); err != nil {
+							log.Printf("[GitHub] Warning: failed to parse page number from Link header: %v", err)
+						}
 					}
 				}
 			}
@@ -411,8 +413,17 @@ func (c *Client) logRateLimitStatus(headers http.Header) {
 		return
 	}
 
-	limitInt, _ := strconv.Atoi(limit)
-	remainingInt, _ := strconv.Atoi(remaining)
+	limitInt, err := strconv.Atoi(limit)
+	if err != nil {
+		log.Printf("[GitHub] Warning: failed to parse X-RateLimit-Limit header '%s': %v", limit, err)
+		return
+	}
+
+	remainingInt, err := strconv.Atoi(remaining)
+	if err != nil {
+		log.Printf("[GitHub] Warning: failed to parse X-RateLimit-Remaining header '%s': %v", remaining, err)
+		return
+	}
 
 	// Log warning when below 5% of rate limit
 	if limitInt > 0 && remainingInt < limitInt/20 {

@@ -8,6 +8,19 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Default configuration values
+const (
+	DefaultPort                         = 8080
+	DefaultRunsPerRepository            = 3
+	DefaultRecentPipelinesLimit         = 50
+	DefaultCacheDurationSeconds         = 1800  // 30 minutes
+	DefaultStaleCacheTTLSeconds         = 86400 // 24 hours
+	DefaultBackgroundRefreshSeconds     = 300   // 5 minutes
+	DefaultUIRefreshIntervalSeconds     = 5
+	DefaultGitLabURL                    = "https://gitlab.com"
+	DefaultGitHubURL                    = "https://api.github.com"
+)
+
 // Config holds application configuration.
 // Follows Single Responsibility - only holds configuration data.
 type Config struct {
@@ -79,6 +92,27 @@ type yamlConfig struct {
 	} `yaml:"ui"`
 }
 
+// loadIntConfig loads an integer configuration value with fallback priority:
+// 1. Environment variable (if set and valid)
+// 2. YAML config value (if non-zero)
+// 3. Default value
+func loadIntConfig(envVar string, yamlValue int, defaultValue int, validator func(int) bool) int {
+	// Try environment variable first
+	if envStr := os.Getenv(envVar); envStr != "" {
+		if val, err := strconv.Atoi(envStr); err == nil && validator(val) {
+			return val
+		}
+	}
+
+	// Fall back to YAML config if set
+	if yamlValue != 0 {
+		return yamlValue
+	}
+
+	// Use default value
+	return defaultValue
+}
+
 // Load loads configuration from YAML file (if exists) and environment variables.
 // Environment variables take precedence over YAML file values.
 // Priority order: Environment Variables -> YAML File -> Default Values
@@ -108,7 +142,7 @@ func Load() (*Config, error) {
 	}
 
 	// Load values with priority: Env -> YAML -> Default
-	port := 8080
+	port := DefaultPort
 	if portStr := os.Getenv("PORT"); portStr != "" {
 		if p, err := strconv.Atoi(portStr); err == nil {
 			port = p
@@ -122,7 +156,7 @@ func Load() (*Config, error) {
 		if yc.GitLab.URL != "" {
 			gitlabURL = yc.GitLab.URL
 		} else {
-			gitlabURL = "https://gitlab.com"
+			gitlabURL = DefaultGitLabURL
 		}
 	}
 
@@ -136,7 +170,7 @@ func Load() (*Config, error) {
 		if yc.GitHub.URL != "" {
 			githubURL = yc.GitHub.URL
 		} else {
-			githubURL = "https://api.github.com"
+			githubURL = DefaultGitHubURL
 		}
 	}
 
@@ -155,41 +189,13 @@ func Load() (*Config, error) {
 		githubWatchedRepos = strings.Join(yc.GitHub.WatchedRepos, ",")
 	}
 
-	runsPerRepo := 3
-	if runsStr := os.Getenv("RUNS_PER_REPOSITORY"); runsStr != "" {
-		if r, err := strconv.Atoi(runsStr); err == nil && r > 0 {
-			runsPerRepo = r
-		}
-	} else if yc.Display.RunsPerRepository != 0 {
-		runsPerRepo = yc.Display.RunsPerRepository
-	}
+	runsPerRepo := loadIntConfig("RUNS_PER_REPOSITORY", yc.Display.RunsPerRepository, DefaultRunsPerRepository, func(v int) bool { return v > 0 })
 
-	recentLimit := 50
-	if limitStr := os.Getenv("RECENT_PIPELINES_LIMIT"); limitStr != "" {
-		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
-			recentLimit = l
-		}
-	} else if yc.Display.RecentPipelinesLimit != 0 {
-		recentLimit = yc.Display.RecentPipelinesLimit
-	}
+	recentLimit := loadIntConfig("RECENT_PIPELINES_LIMIT", yc.Display.RecentPipelinesLimit, DefaultRecentPipelinesLimit, func(v int) bool { return v > 0 })
 
-	gitlabCacheDuration := 1800 // 30 minutes default
-	if cacheStr := os.Getenv("GITLAB_CACHE_DURATION_SECONDS"); cacheStr != "" {
-		if c, err := strconv.Atoi(cacheStr); err == nil && c >= 0 {
-			gitlabCacheDuration = c
-		}
-	} else if yc.GitLab.CacheDurationSeconds != 0 {
-		gitlabCacheDuration = yc.GitLab.CacheDurationSeconds
-	}
+	gitlabCacheDuration := loadIntConfig("GITLAB_CACHE_DURATION_SECONDS", yc.GitLab.CacheDurationSeconds, DefaultCacheDurationSeconds, func(v int) bool { return v >= 0 })
 
-	githubCacheDuration := 1800 // 30 minutes default
-	if cacheStr := os.Getenv("GITHUB_CACHE_DURATION_SECONDS"); cacheStr != "" {
-		if c, err := strconv.Atoi(cacheStr); err == nil && c >= 0 {
-			githubCacheDuration = c
-		}
-	} else if yc.GitHub.CacheDurationSeconds != 0 {
-		githubCacheDuration = yc.GitHub.CacheDurationSeconds
-	}
+	githubCacheDuration := loadIntConfig("GITHUB_CACHE_DURATION_SECONDS", yc.GitHub.CacheDurationSeconds, DefaultCacheDurationSeconds, func(v int) bool { return v >= 0 })
 
 	// Load current user configuration with fallback
 	currentUser := os.Getenv("CURRENT_USER") // Common fallback
@@ -212,32 +218,11 @@ func Load() (*Config, error) {
 		}
 	}
 
-	uiRefreshInterval := 5 // 5 seconds default
-	if refreshStr := os.Getenv("UI_REFRESH_INTERVAL_SECONDS"); refreshStr != "" {
-		if r, err := strconv.Atoi(refreshStr); err == nil && r > 0 {
-			uiRefreshInterval = r
-		}
-	} else if yc.UI.RefreshIntervalSeconds != 0 {
-		uiRefreshInterval = yc.UI.RefreshIntervalSeconds
-	}
+	uiRefreshInterval := loadIntConfig("UI_REFRESH_INTERVAL_SECONDS", yc.UI.RefreshIntervalSeconds, DefaultUIRefreshIntervalSeconds, func(v int) bool { return v > 0 })
 
-	staleCacheTTL := 86400 // 24 hours default
-	if ttlStr := os.Getenv("STALE_CACHE_TTL_SECONDS"); ttlStr != "" {
-		if t, err := strconv.Atoi(ttlStr); err == nil && t > 0 {
-			staleCacheTTL = t
-		}
-	} else if yc.Cache.StaleTTLSeconds != 0 {
-		staleCacheTTL = yc.Cache.StaleTTLSeconds
-	}
+	staleCacheTTL := loadIntConfig("STALE_CACHE_TTL_SECONDS", yc.Cache.StaleTTLSeconds, DefaultStaleCacheTTLSeconds, func(v int) bool { return v > 0 })
 
-	backgroundRefreshInterval := 300 // 5 minutes default
-	if intervalStr := os.Getenv("BACKGROUND_REFRESH_INTERVAL_SECONDS"); intervalStr != "" {
-		if i, err := strconv.Atoi(intervalStr); err == nil && i > 0 {
-			backgroundRefreshInterval = i
-		}
-	} else if yc.Background.RefreshIntervalSeconds != 0 {
-		backgroundRefreshInterval = yc.Background.RefreshIntervalSeconds
-	}
+	backgroundRefreshInterval := loadIntConfig("BACKGROUND_REFRESH_INTERVAL_SECONDS", yc.Background.RefreshIntervalSeconds, DefaultBackgroundRefreshSeconds, func(v int) bool { return v > 0 })
 
 	return &Config{
 		Port:                             port,

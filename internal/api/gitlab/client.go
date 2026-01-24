@@ -140,11 +140,16 @@ func (c *Client) GetProjectsPage(ctx context.Context, page int) ([]domain.Projec
 	hasNextPage := false
 	if totalPages != "" {
 		// Header available - use it
-		fmt.Sscanf(totalPages, "%d", &totalPagesInt)
-		hasNextPage = page < totalPagesInt
+		if _, err := fmt.Sscanf(totalPages, "%d", &totalPagesInt); err != nil {
+			log.Printf("[GitLab] Warning: failed to parse X-Total-Pages header '%s': %v", totalPages, err)
+			// Fall back to heuristic: assume more pages if we got a full page
+			hasNextPage = len(glProjects) >= api.DefaultPageSize
+		} else {
+			hasNextPage = page < totalPagesInt
+		}
 	} else {
 		// No header - assume more pages if we got a full page (100 projects)
-		hasNextPage = len(glProjects) >= 100
+		hasNextPage = len(glProjects) >= api.DefaultPageSize
 	}
 
 	// If no projects returned, definitely no more pages
@@ -513,7 +518,7 @@ func (c *Client) convertMergeRequest(glMR gitlabMergeRequest, projectID string) 
 		UpdatedAt:    glMR.UpdatedAt,
 		WebURL:       glMR.WebURL,
 		ProjectID:    projectID,
-		Repository:   glMR.Title, // GitLab doesn't return repo name in MR, using title
+		Repository:   "", // Will be set by service layer from project name
 	}
 }
 
@@ -540,7 +545,7 @@ func (c *Client) convertIssue(glIssue gitlabIssue, projectID string) domain.Issu
 		UpdatedAt:   glIssue.UpdatedAt,
 		WebURL:      glIssue.WebURL,
 		ProjectID:   projectID,
-		Repository:  glIssue.Title, // GitLab doesn't return repo name in issue, using title
+		Repository:  "", // Will be set by service layer from project name
 	}
 }
 
