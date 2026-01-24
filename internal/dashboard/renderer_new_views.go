@@ -70,6 +70,22 @@ func (r *HTMLRenderer) RenderRepositoryDetailSkeleton(w io.Writer, repositoryID 
 		@keyframes loading { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
 		.skeleton-text { height: 20px; border-radius: 4px; margin-bottom: 10px; }
 		.skeleton-title { height: 40px; width: 60%; border-radius: 4px; margin-bottom: 20px; }
+		.repo-url { margin-bottom: 30px; }
+		.tabs { display: flex; gap: 10px; margin-bottom: 20px; border-bottom: 2px solid var(--border); }
+		.tab-button { background: none; border: none; padding: 12px 24px; cursor: pointer; font-size: 16px; color: var(--text-secondary); border-bottom: 3px solid transparent; margin-bottom: -2px; transition: all 0.3s; }
+		.tab-button:hover { color: var(--text-primary); background: var(--bg-secondary); }
+		.tab-button.active { color: var(--link-color); border-bottom-color: var(--link-color); font-weight: 600; }
+		.tab-content { display: none; }
+		.tab-content.active { display: block; }
+		.runs-section { margin-top: 20px; }
+		.run-item, .mr-item, .issue-item { background: var(--bg-secondary); padding: 20px; border-radius: 8px; margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 4px var(--shadow); transition: background-color 0.3s; }
+		.run-item:hover, .mr-item:hover, .issue-item:hover { background: var(--border); }
+		.run-left { flex: 1; }
+		.run-name { font-size: 18px; font-weight: 600; color: var(--text-primary); margin-bottom: 5px; }
+		.run-branch { font-size: 14px; color: var(--text-secondary); }
+		.run-meta { display: flex; gap: 15px; align-items: center; flex-wrap: wrap; }
+		.mr-title, .issue-title { font-size: 18px; font-weight: 600; color: var(--text-primary); margin-bottom: 8px; }
+		.mr-meta, .issue-meta { font-size: 14px; color: var(--text-secondary); }
 	`))
 	sb.WriteString(`<body>
 	<div class="container">
@@ -88,6 +104,29 @@ func (r *HTMLRenderer) RenderRepositoryDetailSkeleton(w io.Writer, repositoryID 
 	</div>
 	<script>
 		const repositoryID = ` + fmt.Sprintf("%q", repositoryID) + `;
+
+		function switchTab(tabName, button) {
+			// Hide all tab contents
+			document.querySelectorAll('.tab-content').forEach(tab => {
+				tab.classList.remove('active');
+			});
+
+			// Remove active from all buttons
+			document.querySelectorAll('.tab-button').forEach(btn => {
+				btn.classList.remove('active');
+			});
+
+			// Show selected tab
+			const selectedTab = document.getElementById(tabName + '-tab');
+			if (selectedTab) {
+				selectedTab.classList.add('active');
+			}
+
+			// Add active to clicked button
+			if (button) {
+				button.classList.add('active');
+			}
+		}
 
 		async function loadRepositoryDetail() {
 			try {
@@ -128,6 +167,7 @@ func (r *HTMLRenderer) RenderRepositoryDetailSkeleton(w io.Writer, repositoryID 
 }
 
 // RenderRepositoryDetail renders the detail page for a single repository.
+// This renders only the content fragment to be inserted via AJAX.
 func (r *HTMLRenderer) RenderRepositoryDetail(w io.Writer, repository service.RepositoryWithRuns, mrs []domain.MergeRequest, issues []domain.Issue) error {
 	var sb strings.Builder
 
@@ -155,55 +195,12 @@ func (r *HTMLRenderer) RenderRepositoryDetail(w io.Writer, repository service.Re
 		successRate = float64(successCount) / float64(totalRuns) * 100
 	}
 
-	description := fmt.Sprintf("View pipeline runs and statistics for %s", repository.Project.Name)
-	sb.WriteString(htmlHead(repository.Project.Name, description))
-	sb.WriteString(pageCSS(`
-		.repo-url { color: var(--text-secondary); font-size: 14px; margin-bottom: 30px; }
-		.repo-url a { color: var(--link-color); text-decoration: none; }
-		.repo-url a:hover { text-decoration: underline; }
-		.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 30px; }
-		.stat-card { background: var(--bg-secondary); padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px var(--shadow); transition: background-color 0.3s; }
-		.stat-label { font-size: 14px; color: var(--text-secondary); margin-bottom: 8px; }
-		.stat-value { font-size: 28px; font-weight: 600; color: var(--text-primary); }
-		.tabs { display: flex; gap: 10px; margin-bottom: 20px; border-bottom: 2px solid var(--border-color); }
-		.tab-button { padding: 12px 24px; background: none; border: none; border-bottom: 3px solid transparent; color: var(--text-secondary); cursor: pointer; font-size: 16px; font-weight: 500; transition: all 0.2s; }
-		.tab-button:hover { color: var(--text-primary); background: var(--bg-primary); }
-		.tab-button.active { color: var(--link-color); border-bottom-color: var(--link-color); }
-		.tab-content { display: none; }
-		.tab-content.active { display: block; }
-		.runs-section { background: var(--bg-secondary); border-radius: 8px; box-shadow: 0 2px 4px var(--shadow); padding: 20px; transition: background-color 0.3s; }
-		.runs-section h2 { margin-top: 0; color: var(--text-primary); }
-		.run-item { padding: 15px; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }
-		.run-item:last-child { border-bottom: none; }
-		.run-item:hover { background: var(--bg-primary); }
-		.run-left { flex: 1; min-width: 200px; }
-		.run-name { font-weight: 500; color: var(--text-primary); margin-bottom: 5px; }
-		.run-branch { font-size: 13px; color: var(--text-secondary); }
-		.run-meta { display: flex; gap: 15px; align-items: center; flex-wrap: wrap; font-size: 14px; color: var(--text-secondary); }
-		.run-link { color: var(--link-color); text-decoration: none; font-size: 14px; }
-		.run-link:hover { text-decoration: underline; }
-		.mr-item, .issue-item { padding: 15px; border-bottom: 1px solid var(--border-color); }
-		.mr-item:last-child, .issue-item:last-child { border-bottom: none; }
-		.mr-item:hover, .issue-item:hover { background: var(--bg-primary); }
-		.mr-title, .issue-title { font-weight: 500; color: var(--text-primary); margin-bottom: 5px; }
-		.mr-meta, .issue-meta { font-size: 13px; color: var(--text-secondary); }
-		@media (max-width: 768px) {
-			.run-item { flex-direction: column; align-items: flex-start; }
-			.run-meta { flex-direction: column; align-items: flex-start; gap: 8px; }
-			.tabs { overflow-x: auto; }
-		}
-	`))
-	sb.WriteString(`<body>
-`)
-	sb.WriteString(loadingSpinner())
-	sb.WriteString(fmt.Sprintf(`	<div class="container">
-		<h1>%s</h1>
+	// Just render the content fragment (no full page structure)
+	sb.WriteString(fmt.Sprintf(`<h1>%s</h1>
 		<div class="repo-url">
 			%s
 		</div>
 `, repository.Project.Name, externalLink(repository.Project.WebURL, "View →")))
-
-	sb.WriteString(buildNavigationWithProfiles(nil))
 	sb.WriteString(`
 		<div class="stats-grid">
 			<div class="stat-card">
@@ -285,33 +282,7 @@ func (r *HTMLRenderer) RenderRepositoryDetail(w io.Writer, repository service.Re
 
 	sb.WriteString(`			</div>
 		</div>
-
-		<script>
-			function switchTab(tabName, button) {
-				// Hide all tab contents
-				document.querySelectorAll('.tab-content').forEach(tab => {
-					tab.classList.remove('active');
-				});
-
-				// Remove active from all buttons
-				document.querySelectorAll('.tab-button').forEach(btn => {
-					btn.classList.remove('active');
-				});
-
-				// Show selected tab
-				const selectedTab = document.getElementById(tabName + '-tab');
-				if (selectedTab) {
-					selectedTab.classList.add('active');
-				}
-
-				// Add active to clicked button
-				if (button) {
-					button.classList.add('active');
-				}
-			}
-		</script>
-	</div>`)
-	sb.WriteString(htmlFooter())
+`)
 
 	_, err := w.Write([]byte(sb.String()))
 	return err
