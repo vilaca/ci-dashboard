@@ -519,7 +519,6 @@ func (c *StaleCachingClient) ForceRefresh(ctx context.Context, key string) error
 	}
 
 	method := parts[0]
-	var err error
 
 	switch method {
 	case "GetProjects":
@@ -588,7 +587,7 @@ func (c *StaleCachingClient) ForceRefresh(ctx context.Context, key string) error
 
 	case "GetMergeRequests":
 		if c.extendedClient == nil {
-			return nil // Skip if not supported
+			return fmt.Errorf("client does not support GetMergeRequests")
 		}
 		if len(parts) != 2 {
 			return fmt.Errorf("invalid key format: %s", key)
@@ -605,7 +604,7 @@ func (c *StaleCachingClient) ForceRefresh(ctx context.Context, key string) error
 
 	case "GetIssues":
 		if c.extendedClient == nil {
-			return nil // Skip if not supported
+			return fmt.Errorf("client does not support GetIssues")
 		}
 		if len(parts) != 2 {
 			return fmt.Errorf("invalid key format: %s", key)
@@ -622,7 +621,7 @@ func (c *StaleCachingClient) ForceRefresh(ctx context.Context, key string) error
 
 	case "GetCurrentUser":
 		if c.userClient == nil {
-			return nil // Skip if not supported
+			return fmt.Errorf("client does not support GetCurrentUser")
 		}
 		profile, fetchErr := c.userClient.GetCurrentUser(ctx)
 		if fetchErr != nil {
@@ -634,5 +633,5 @@ func (c *StaleCachingClient) ForceRefresh(ctx context.Context, key string) error
 		return fmt.Errorf("unknown method: %s", method)
 	}
 
-	return err
+	return nil
 }

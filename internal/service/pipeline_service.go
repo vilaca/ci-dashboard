@@ -348,7 +348,7 @@ func (s *PipelineService) GetPipelinesForProject(ctx context.Context, projectID 
 	defer s.mu.RUnlock()
 
 	// Try to find which platform this project belongs to
-	projects, err := s.GetAllProjects(ctx)
+	projects, err := s.getAllProjectsLocked(ctx)
 	if err != nil {
 		return nil, err
 	}
