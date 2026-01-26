@@ -52,6 +52,7 @@ func (r *HTMLRenderer) RenderRepositoriesSkeleton(w io.Writer, userProfiles []do
 				<tr>
 					<th style="text-align: left;">Repository</th>
 					<th style="text-align: center;">Platform</th>
+					<th style="text-align: center;">Role</th>
 					<th style="text-align: center;">Status</th>
 					<th style="text-align: center;">Branches</th>
 					<th style="text-align: center;">MRs/PRs</th>
@@ -60,7 +61,7 @@ func (r *HTMLRenderer) RenderRepositoriesSkeleton(w io.Writer, userProfiles []do
 				</tr>
 			</thead>
 			<tbody id="repositories-tbody">
-				<tr><td colspan="7" class="loading-cell">Loading repositories...</td></tr>
+				<tr><td colspan="8" class="loading-cell">Loading repositories...</td></tr>
 			</tbody>
 		</table>
 	</div>
@@ -377,6 +378,30 @@ func repositoriesTableScript() string {
 			return div.innerHTML;
 		}
 
+		function getRoleName(permissions) {
+			if (!permissions) {
+				return '-';
+			}
+
+			// GitLab access levels: 10=Guest, 20=Reporter, 30=Developer, 40=Maintainer, 50=Owner
+			// GitHub uses Admin/Push/Pull booleans
+			const accessLevel = permissions.AccessLevel || 0;
+
+			if (accessLevel >= 50 || permissions.Admin) {
+				return 'Owner';
+			} else if (accessLevel >= 40 || (permissions.Push && permissions.Admin === false)) {
+				return 'Maintainer';
+			} else if (accessLevel >= 30 || permissions.Push) {
+				return 'Developer';
+			} else if (accessLevel >= 20) {
+				return 'Reporter';
+			} else if (accessLevel >= 10 || permissions.Pull) {
+				return 'Guest';
+			}
+
+			return '-';
+		}
+
 		function renderAllRepositories() {
 			tbody.innerHTML = '';
 
@@ -427,12 +452,16 @@ func repositoriesTableScript() string {
 				const favClass = isFavorite(repo.Project.ID) ? 'favorite-star favorited' : 'favorite-star';
 				const favTitle = isFavorite(repo.Project.ID) ? 'Remove from favorites' : 'Add to favorites';
 
+				const roleName = getRoleName(repo.Project.Permissions);
+				const roleDisplay = '<span style="font-size: 12px; color: var(--text-secondary);">' + roleName + '</span>';
+
 				row.innerHTML = '<td>' +
 					'<span class="' + favClass + '" data-repo-id="' + escapeHtml(repo.Project.ID) + '" title="' + favTitle + '" style="cursor: pointer; margin-right: 8px;">' + favIcon + '</span>' +
 					'<a href="' + repoDetailLink + '" style="color: var(--text-primary); text-decoration: none; font-weight: 600;" class="repo-link"><strong>' + escapeHtml(repo.Project.Name) + '</strong></a> ' +
 					forkBadge +
 					'</td>' +
 					'<td class="platform-cell">' + platformBadge + '</td>' +
+					'<td class="count-cell">' + roleDisplay + '</td>' +
 					'<td class="status-cell">' + statusDisplay + '</td>' +
 					'<td class="count-cell">' + branchCount + '</td>' +
 					'<td class="count-cell">' + mrDisplay + '</td>' +
