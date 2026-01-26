@@ -432,7 +432,7 @@ func (s *PipelineService) GetDefaultBranchForProject(ctx context.Context, projec
 	}
 
 	// Get branches (just metadata, not pipelines yet)
-	branches, err := client.GetBranches(ctx, project.ID, 50)
+	branches, err := client.GetBranches(ctx, project.ID, 200)
 	if err != nil {
 		log.Printf("[GetDefaultBranchForProject] Failed to get branches for %s: %v", project.Name, err)
 		return nil, nil, 0, err
@@ -441,7 +441,7 @@ func (s *PipelineService) GetDefaultBranchForProject(ctx context.Context, projec
 	// Fix repository names for all branches
 	fixBranchRepositoryNames(branches, project)
 
-	// Find default branch
+	// Find default branch - first try by IsDefault flag, then by project.DefaultBranch name
 	var defaultBranch *domain.Branch
 	for i := range branches {
 		if branches[i].IsDefault {
@@ -450,8 +450,20 @@ func (s *PipelineService) GetDefaultBranchForProject(ctx context.Context, projec
 		}
 	}
 
+	// If not found by flag, search by name from project metadata
+	if defaultBranch == nil && project.DefaultBranch != "" {
+		for i := range branches {
+			if branches[i].Name == project.DefaultBranch {
+				defaultBranch = &branches[i]
+				log.Printf("[GetDefaultBranchForProject] Found default branch for %s by name: %s", project.Name, project.DefaultBranch)
+				break
+			}
+		}
+	}
+
 	if defaultBranch == nil {
-		log.Printf("[GetDefaultBranchForProject] No default branch found for %s (total branches: %d)", project.Name, len(branches))
+		log.Printf("[GetDefaultBranchForProject] No default branch found for %s (total branches: %d, project.DefaultBranch: %s)",
+			project.Name, len(branches), project.DefaultBranch)
 	} else if defaultBranch.LastCommitDate.IsZero() {
 		log.Printf("[GetDefaultBranchForProject] Default branch %s for %s has zero commit date (Author: %s)", defaultBranch.Name, project.Name, defaultBranch.CommitAuthor)
 	}
