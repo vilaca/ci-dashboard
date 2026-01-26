@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/vilaca/ci-dashboard/internal/api"
@@ -19,6 +20,9 @@ import (
 // Follows Single Responsibility Principle - only handles GitHub API communication.
 type Client struct {
 	*api.BaseClient
+	rateLimitMu       sync.RWMutex
+	rateLimitRemaining int
+	rateLimitReset     time.Time
 }
 
 // NewClient creates a new GitHub Actions client.
@@ -86,7 +90,7 @@ func (c *Client) GetProjectCount(ctx context.Context) (int, error) {
 	}
 	defer resp.Body.Close()
 
-	c.logRateLimitStatus(resp.Header)
+	c.updateRateLimit(resp.Header)
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -147,7 +151,7 @@ func (c *Client) GetProjectsPage(ctx context.Context, page int) ([]domain.Projec
 		return nil, false, fmt.Errorf("request failed: %w", err)
 	}
 
-	c.logRateLimitStatus(resp.Header)
+	c.updateRateLimit(resp.Header)
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -348,6 +352,11 @@ func (c *Client) doRequest(ctx context.Context, url string, result interface{}) 
 
 // doRequestWithRetry performs an HTTP request with exponential backoff retry.
 func (c *Client) doRequestWithRetry(ctx context.Context, url string, result interface{}, maxRetries int) error {
+	// Check if rate limit is exhausted before making request
+	if err := c.waitForRateLimit(ctx); err != nil {
+		return err
+	}
+
 	var lastErr error
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
@@ -378,8 +387,8 @@ func (c *Client) doRequestWithRetry(ctx context.Context, url string, result inte
 			continue
 		}
 
-		// Check and log rate limit status
-		c.logRateLimitStatus(resp.Header)
+		// Update rate limit tracking and log status
+		c.updateRateLimit(resp.Header)
 
 		// Handle rate limit errors (403)
 		if resp.StatusCode == http.StatusForbidden {
@@ -434,35 +443,6 @@ func (c *Client) doRequestWithRetry(ctx context.Context, url string, result inte
 	return fmt.Errorf("request failed after %d retries", maxRetries)
 }
 
-// logRateLimitStatus logs the current rate limit status from response headers.
-func (c *Client) logRateLimitStatus(headers http.Header) {
-	limit := headers.Get("X-RateLimit-Limit")
-	remaining := headers.Get("X-RateLimit-Remaining")
-
-	if limit == "" || remaining == "" {
-		return
-	}
-
-	limitInt, err := strconv.Atoi(limit)
-	if err != nil {
-		log.Printf("[GitHub] Warning: failed to parse X-RateLimit-Limit header '%s': %v", limit, err)
-		return
-	}
-
-	remainingInt, err := strconv.Atoi(remaining)
-	if err != nil {
-		log.Printf("[GitHub] Warning: failed to parse X-RateLimit-Remaining header '%s': %v", remaining, err)
-		return
-	}
-
-	// Log warning when below 5% of rate limit
-	if limitInt > 0 && remainingInt < limitInt/20 {
-		resetTime := c.getRateLimitReset(headers)
-		log.Printf("GitHub API: Rate limit warning - %d/%d requests remaining (resets at %v)",
-			remainingInt, limitInt, resetTime.Format("15:04:05"))
-	}
-}
-
 // getRateLimitReset extracts the rate limit reset time from headers.
 func (c *Client) getRateLimitReset(headers http.Header) time.Time {
 	reset := headers.Get("X-RateLimit-Reset")
@@ -476,6 +456,77 @@ func (c *Client) getRateLimitReset(headers http.Header) time.Time {
 	}
 
 	return time.Unix(resetUnix, 0)
+}
+
+// waitForRateLimit blocks if rate limit is exhausted, waiting until reset time.
+func (c *Client) waitForRateLimit(ctx context.Context) error {
+	c.rateLimitMu.RLock()
+	remaining := c.rateLimitRemaining
+	resetTime := c.rateLimitReset
+	c.rateLimitMu.RUnlock()
+
+	// If we have requests remaining or don't know the limit yet, proceed
+	if remaining > 0 || resetTime.IsZero() {
+		return nil
+	}
+
+	// Rate limit exhausted - calculate wait time
+	waitDuration := time.Until(resetTime)
+	if waitDuration <= 0 {
+		// Reset time has passed, proceed
+		return nil
+	}
+
+	log.Printf("GitHub API: Rate limit exhausted (0 requests remaining). Waiting %v until reset at %v",
+		waitDuration.Round(time.Second), resetTime.Format("15:04:05"))
+
+	// Wait until reset time or context cancellation
+	select {
+	case <-time.After(waitDuration):
+		log.Printf("GitHub API: Rate limit reset, resuming requests")
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("context cancelled while waiting for rate limit reset: %w", ctx.Err())
+	}
+}
+
+// updateRateLimit updates the rate limit state from response headers and logs warnings.
+func (c *Client) updateRateLimit(headers http.Header) {
+	limit := headers.Get("X-RateLimit-Limit")
+	remaining := headers.Get("X-RateLimit-Remaining")
+	reset := headers.Get("X-RateLimit-Reset")
+
+	if limit == "" || remaining == "" || reset == "" {
+		return
+	}
+
+	limitInt, err := strconv.Atoi(limit)
+	if err != nil {
+		return
+	}
+
+	remainingInt, err := strconv.Atoi(remaining)
+	if err != nil {
+		return
+	}
+
+	resetUnix, err := strconv.ParseInt(reset, 10, 64)
+	if err != nil {
+		return
+	}
+	resetTime := time.Unix(resetUnix, 0)
+
+	// Update stored rate limit state
+	c.rateLimitMu.Lock()
+	c.rateLimitRemaining = remainingInt
+	c.rateLimitReset = resetTime
+	c.rateLimitMu.Unlock()
+
+	// Log warning when below 5% of rate limit
+	if limitInt > 0 && remainingInt < limitInt/20 {
+		log.Printf("GitHub API: Rate limit warning - %d/%d requests remaining (resets at %v)",
+			remainingInt, limitInt, resetTime.Format("15:04:05"))
+	}
 }
 
 // convertProjects converts GitHub repositories to domain models.
