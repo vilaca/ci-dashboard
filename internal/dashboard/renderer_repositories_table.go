@@ -187,13 +187,14 @@ const repositoriesTablePageCSS = `
 	.pipeline-table th {
 		padding: 12px 8px;
 	}
-	.pipeline-table th:nth-child(1) { width: 32%; text-align: left; }
-	.pipeline-table th:nth-child(2) { width: 8%; text-align: center; }
-	.pipeline-table th:nth-child(3) { width: 10%; text-align: center; }
-	.pipeline-table th:nth-child(4) { width: 8%; text-align: center; }
-	.pipeline-table th:nth-child(5) { width: 12%; text-align: center; }
-	.pipeline-table th:nth-child(6) { width: 18%; text-align: center; }
-	.pipeline-table th:nth-child(7) { width: 12%; text-align: right; }
+	.pipeline-table th:nth-child(1) { width: 30%; text-align: left; }
+	.pipeline-table th:nth-child(2) { width: 7%; text-align: center; }
+	.pipeline-table th:nth-child(3) { width: 8%; text-align: center; }
+	.pipeline-table th:nth-child(4) { width: 9%; text-align: center; }
+	.pipeline-table th:nth-child(5) { width: 7%; text-align: center; }
+	.pipeline-table th:nth-child(6) { width: 10%; text-align: center; }
+	.pipeline-table th:nth-child(7) { width: 17%; text-align: center; }
+	.pipeline-table th:nth-child(8) { width: 12%; text-align: right; }
 	.platform-cell {
 		text-align: center;
 	}
