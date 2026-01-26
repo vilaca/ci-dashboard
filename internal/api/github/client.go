@@ -522,10 +522,13 @@ func (c *Client) updateRateLimit(headers http.Header) {
 	c.rateLimitReset = resetTime
 	c.rateLimitMu.Unlock()
 
-	// Log warning when below 5% of rate limit
-	if limitInt > 0 && remainingInt < limitInt/20 {
+	// Log warning when below 5% of rate limit (but not at 0 - that will trigger blocking message)
+	if limitInt > 0 && remainingInt > 0 && remainingInt < limitInt/20 {
 		log.Printf("GitHub API: Rate limit warning - %d/%d requests remaining (resets at %v)",
 			remainingInt, limitInt, resetTime.Format("15:04:05"))
+	} else if remainingInt == 0 {
+		log.Printf("GitHub API: Rate limit exhausted - further requests will block until %v",
+			resetTime.Format("15:04:05"))
 	}
 }
 
