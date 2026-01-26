@@ -305,6 +305,35 @@ func (c *Client) GetBranches(ctx context.Context, projectID string, limit int) (
 	return result.([]domain.Branch), nil
 }
 
+// GetBranch retrieves a single branch by name.
+func (c *Client) GetBranch(ctx context.Context, projectID, branchName string) (*domain.Branch, error) {
+	result, err := c.DoRateLimited(ctx, func() (interface{}, error) {
+		url := fmt.Sprintf("%s/repos/%s/branches/%s", c.BaseURL, projectID, branchName)
+
+		var ghBranch githubBranch
+		if err := c.doRequest(ctx, url, &ghBranch); err != nil {
+			return nil, fmt.Errorf("failed to get branch %s (URL: %s): %w", branchName, url, err)
+		}
+
+		// Fetch commit details
+		commitURL := fmt.Sprintf("%s/repos/%s/commits/%s", c.BaseURL, projectID, ghBranch.Commit.SHA)
+		var commitDetails githubCommit
+		if err := c.doRequest(ctx, commitURL, &commitDetails); err != nil {
+			log.Printf("[GitHub] Failed to get commit details for %s/%s: %v", projectID, branchName, err)
+			branch := c.convertBranch(ghBranch, projectID, nil, true)
+			return &branch, nil
+		}
+
+		branch := c.convertBranch(ghBranch, projectID, &commitDetails, true)
+		return &branch, nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+	return result.(*domain.Branch), nil
+}
+
 // doRequest performs an HTTP request to GitHub API with rate limit handling.
 // Follows Single Level of Abstraction Principle (SLAP).
 func (c *Client) doRequest(ctx context.Context, url string, result interface{}) error {

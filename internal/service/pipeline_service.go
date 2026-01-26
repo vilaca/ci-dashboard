@@ -461,29 +461,24 @@ func (s *PipelineService) GetDefaultBranchForProject(ctx context.Context, projec
 		}
 	}
 
-	// Last resort: try common default branch names
-	if defaultBranch == nil && len(branches) > 0 {
-		commonNames := []string{"main", "master", "develop", "dev"}
-		for _, name := range commonNames {
-			for i := range branches {
-				if branches[i].Name == name {
-					defaultBranch = &branches[i]
-					log.Printf("[GetDefaultBranchForProject] Using common branch name %s for %s (project.DefaultBranch was: %s)",
-						name, project.Name, project.DefaultBranch)
-					break
-				}
-			}
-			if defaultBranch != nil {
-				break
-			}
-		}
-	}
+	// If still not found, fetch the default branch directly by name using project metadata
+	if defaultBranch == nil && project.DefaultBranch != "" {
+		log.Printf("[GetDefaultBranchForProject] Default branch %s not in first %d branches for %s, fetching directly",
+			project.DefaultBranch, len(branches), project.Name)
 
-	// Absolute last resort: use the first branch (most recently updated)
-	if defaultBranch == nil && len(branches) > 0 {
-		defaultBranch = &branches[0]
-		log.Printf("[GetDefaultBranchForProject] Using first branch %s for %s as fallback (project.DefaultBranch was: %s)",
-			defaultBranch.Name, project.Name, project.DefaultBranch)
+		branch, err := client.GetBranch(ctx, project.ID, project.DefaultBranch)
+		if err != nil {
+			log.Printf("[GetDefaultBranchForProject] Failed to fetch default branch %s for %s: %v",
+				project.DefaultBranch, project.Name, err)
+		} else {
+			// Fix repository name
+			if branch.Repository == project.ID {
+				branch.Repository = project.Name
+			}
+			defaultBranch = branch
+			log.Printf("[GetDefaultBranchForProject] Successfully fetched default branch %s for %s directly",
+				project.DefaultBranch, project.Name)
+		}
 	}
 
 	if defaultBranch == nil {

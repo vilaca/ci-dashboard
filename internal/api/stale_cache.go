@@ -295,6 +295,16 @@ func (c *StaleCachingClient) GetBranches(ctx context.Context, projectID string, 
 	return c.client.GetBranches(ctx, projectID, limit)
 }
 
+func (c *StaleCachingClient) GetBranch(ctx context.Context, projectID, branchName string) (*domain.Branch, error) {
+	key := fmt.Sprintf("GetBranch:%s:%s", projectID, branchName)
+	branch, found := getCached(c.cache, key, &domain.Branch{})
+	if found {
+		return branch, nil
+	}
+	// Cache miss - fetch from underlying client
+	return c.client.GetBranch(ctx, projectID, branchName)
+}
+
 // GetMergeRequests with caching
 func (c *StaleCachingClient) GetMergeRequests(ctx context.Context, projectID string) ([]domain.MergeRequest, error) {
 	if c.extendedClient == nil {

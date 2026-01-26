@@ -30,6 +30,9 @@ type Client interface {
 	// GetBranches returns branches for a given project.
 	// limit controls max branches to return (0 = all branches).
 	GetBranches(ctx context.Context, projectID string, limit int) ([]domain.Branch, error)
+
+	// GetBranch retrieves a single branch by name.
+	GetBranch(ctx context.Context, projectID, branchName string) (*domain.Branch, error)
 }
 
 // WorkflowClient extends Client with workflow-specific operations.

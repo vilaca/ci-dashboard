@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/vilaca/ci-dashboard/internal/api"
@@ -234,6 +235,28 @@ func (c *Client) GetBranches(ctx context.Context, projectID string, limit int) (
 		return nil, err
 	}
 	return result.([]domain.Branch), nil
+}
+
+// GetBranch retrieves a single branch by name.
+func (c *Client) GetBranch(ctx context.Context, projectID, branchName string) (*domain.Branch, error) {
+	result, err := c.DoRateLimited(ctx, func() (interface{}, error) {
+		// URL encode the branch name to handle special characters
+		encodedBranch := url.QueryEscape(branchName)
+		url := fmt.Sprintf("%s/api/v4/projects/%s/repository/branches/%s", c.BaseURL, projectID, encodedBranch)
+
+		var glBranch gitlabBranch
+		if err := c.doRequest(ctx, url, &glBranch); err != nil {
+			return nil, fmt.Errorf("failed to get branch %s (URL: %s): %w", branchName, url, err)
+		}
+
+		branch := c.convertBranch(glBranch, projectID)
+		return &branch, nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+	return result.(*domain.Branch), nil
 }
 
 // doRequest performs an HTTP request to GitLab API.
