@@ -205,7 +205,7 @@ func (h *Handler) handleRepositoriesBulk(w http.ResponseWriter, r *http.Request)
 	w.Header().Set("Cache-Control", "no-cache")
 
 	page := 1
-	limit := 50
+	limit := 1000
 	if pageParam := r.URL.Query().Get("page"); pageParam != "" {
 		if p, err := strconv.Atoi(pageParam); err == nil && p > 0 {
 			page = p

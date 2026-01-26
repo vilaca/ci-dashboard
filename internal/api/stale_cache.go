@@ -534,7 +534,7 @@ func (c *StaleCachingClient) ForceRefresh(ctx context.Context, key string) error
 		if len(parts) != 3 {
 			return fmt.Errorf("invalid key format: %s", key)
 		}
-		limit := 50
+		limit := 200
 		if parsedLimit, err := strconv.Atoi(parts[2]); err == nil && parsedLimit > 0 {
 			limit = parsedLimit
 		}
@@ -552,7 +552,7 @@ func (c *StaleCachingClient) ForceRefresh(ctx context.Context, key string) error
 		if len(parts) != 3 {
 			return fmt.Errorf("invalid key format: %s", key)
 		}
-		limit := 50
+		limit := 200
 		if parsedLimit, err := strconv.Atoi(parts[2]); err == nil && parsedLimit > 0 {
 			limit = parsedLimit
 		}
