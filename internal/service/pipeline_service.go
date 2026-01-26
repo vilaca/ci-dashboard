@@ -282,11 +282,11 @@ func (s *PipelineService) forceRefreshDataForProjects(ctx context.Context, platf
 			}
 		}(projectID, projectName, defaultBranch)
 
-		// Fetch branches
+		// Fetch branches (use 200 to match GetDefaultBranchForProject cache key)
 		wg.Add(1)
 		go func(pid, pname string) {
 			defer wg.Done()
-			key := fmt.Sprintf("GetBranches:%s:50", pid)
+			key := fmt.Sprintf("GetBranches:%s:200", pid)
 			if err := client.ForceRefresh(ctx, key); err != nil {
 				errChan <- fmt.Errorf("GetBranches %s: %w", pname, err)
 			}
