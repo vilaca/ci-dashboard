@@ -434,6 +434,7 @@ func (s *PipelineService) GetDefaultBranchForProject(ctx context.Context, projec
 	// Get branches (just metadata, not pipelines yet)
 	branches, err := client.GetBranches(ctx, project.ID, 50)
 	if err != nil {
+		log.Printf("[GetDefaultBranchForProject] Failed to get branches for %s: %v", project.Name, err)
 		return nil, nil, 0, err
 	}
 
@@ -447,6 +448,12 @@ func (s *PipelineService) GetDefaultBranchForProject(ctx context.Context, projec
 			defaultBranch = &branches[i]
 			break
 		}
+	}
+
+	if defaultBranch == nil {
+		log.Printf("[GetDefaultBranchForProject] No default branch found for %s (total branches: %d)", project.Name, len(branches))
+	} else if defaultBranch.LastCommitDate.IsZero() {
+		log.Printf("[GetDefaultBranchForProject] Default branch %s for %s has zero commit date (Author: %s)", defaultBranch.Name, project.Name, defaultBranch.CommitAuthor)
 	}
 
 	// Get pipeline only for default branch
