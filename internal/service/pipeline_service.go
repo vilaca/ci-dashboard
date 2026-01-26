@@ -470,7 +470,7 @@ func (s *PipelineService) GetDefaultBranchForProject(ctx context.Context, projec
 		if err != nil {
 			log.Printf("[GetDefaultBranchForProject] Failed to fetch default branch %s for %s: %v",
 				project.DefaultBranch, project.Name, err)
-		} else {
+		} else if branch != nil {
 			// Fix repository name
 			if branch.Repository == project.ID {
 				branch.Repository = project.Name
