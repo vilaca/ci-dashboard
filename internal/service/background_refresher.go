@@ -72,13 +72,11 @@ func (r *BackgroundRefresher) Stop() {
 }
 
 // refreshLoop performs periodic data refreshes.
-// Performs an initial fetch in the background after a short delay.
+// Performs an initial fetch immediately, then periodically.
 func (r *BackgroundRefresher) refreshLoop() {
 	defer r.wg.Done()
 
-	// Perform initial fetch after delay (allows server to fully start)
-	// This runs in background, not blocking the server
-	time.Sleep(InitialRefreshDelay)
+	// Perform initial fetch immediately (non-blocking)
 	r.logger.Printf("Background refresher: Performing initial background fetch...")
 	r.refreshData()
 
