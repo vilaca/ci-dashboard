@@ -268,7 +268,7 @@ func (s *PipelineService) forceRefreshDataForProjects(ctx context.Context, platf
 
 		// Fetch default branch pipeline
 		wg.Add(1)
-		go func(pid, branch string) {
+		go func(pid, pname, branch string) {
 			defer wg.Done()
 			key := fmt.Sprintf("GetLatestPipeline:%s:%s", pid, branch)
 			if err := client.ForceRefresh(ctx, key); err != nil {
@@ -276,11 +276,11 @@ func (s *PipelineService) forceRefreshDataForProjects(ctx context.Context, platf
 				if branch == "main" {
 					key = fmt.Sprintf("GetLatestPipeline:%s:master", pid)
 					if err := client.ForceRefresh(ctx, key); err != nil {
-						log.Printf("Failed to fetch pipeline for %s on both main and master branches: %v", pid, err)
+						log.Printf("Failed to fetch pipeline for %s on both main and master branches: %v", pname, err)
 					}
 				}
 			}
-		}(projectID, defaultBranch)
+		}(projectID, projectName, defaultBranch)
 
 		// Fetch branches
 		wg.Add(1)
