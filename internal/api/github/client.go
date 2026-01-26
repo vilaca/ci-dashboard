@@ -285,14 +285,20 @@ func (c *Client) GetBranches(ctx context.Context, projectID string, limit int) (
 		for i, ghb := range ghBranches {
 			isDefault := (defaultBranch != "" && ghb.Name == defaultBranch)
 
-			// Fetch commit details for all branches to ensure we have author/date
-			commitURL := fmt.Sprintf("%s/repos/%s/commits/%s", c.BaseURL, projectID, ghb.Commit.SHA)
-			var commitDetails githubCommit
-			if err := c.doRequest(ctx, commitURL, &commitDetails); err != nil {
-				log.Printf("[GitHub] Failed to get commit details for %s/%s (URL: %s): %v", projectID, ghb.Name, commitURL, err)
-				branches[i] = c.convertBranch(ghb, projectID, nil, isDefault)
+			// Only fetch commit details for the default branch to conserve API rate limits
+			// Non-default branches will be fetched on-demand if needed via GetBranch()
+			if isDefault {
+				commitURL := fmt.Sprintf("%s/repos/%s/commits/%s", c.BaseURL, projectID, ghb.Commit.SHA)
+				var commitDetails githubCommit
+				if err := c.doRequest(ctx, commitURL, &commitDetails); err != nil {
+					log.Printf("[GitHub] Failed to get commit details for %s/%s (URL: %s): %v", projectID, ghb.Name, commitURL, err)
+					branches[i] = c.convertBranch(ghb, projectID, nil, isDefault)
+				} else {
+					branches[i] = c.convertBranch(ghb, projectID, &commitDetails, isDefault)
+				}
 			} else {
-				branches[i] = c.convertBranch(ghb, projectID, &commitDetails, isDefault)
+				// Non-default branch - no commit details to save API calls
+				branches[i] = c.convertBranch(ghb, projectID, nil, isDefault)
 			}
 		}
 
