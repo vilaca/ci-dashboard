@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -12,11 +11,6 @@ import (
 	"time"
 
 	"github.com/vilaca/ci-dashboard/internal/domain"
-)
-
-const (
-	// MemoryMonitorInterval is how often memory usage stats are logged
-	MemoryMonitorInterval = 30 * time.Second
 )
 
 // StaleCache implements stale-while-revalidate caching strategy.
@@ -196,30 +190,6 @@ type CacheStats struct {
 	ExpiredEntries int
 }
 
-// monitorMemory logs memory usage periodically.
-func (c *StaleCache) monitorMemory() {
-	ticker := time.NewTicker(MemoryMonitorInterval)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		var m runtime.MemStats
-		runtime.ReadMemStats(&m)
-
-		stats := c.GetStats()
-
-		log.Printf("[Memory] Alloc=%d MB, TotalAlloc=%d MB, Sys=%d MB, NumGC=%d | Cache: %d total (%d fresh, %d stale, %d expired)",
-			m.Alloc/1024/1024,
-			m.TotalAlloc/1024/1024,
-			m.Sys/1024/1024,
-			m.NumGC,
-			stats.TotalEntries,
-			stats.FreshEntries,
-			stats.StaleEntries,
-			stats.ExpiredEntries,
-		)
-	}
-}
-
 // StaleCachingClient wraps a Client with stale-while-revalidate caching.
 type StaleCachingClient struct {
 	client         Client
@@ -231,9 +201,20 @@ type StaleCachingClient struct {
 
 // NewStaleCachingClient creates a new stale-caching client wrapper.
 func NewStaleCachingClient(client Client, ttl, staleTTL time.Duration) *StaleCachingClient {
-	extendedClient, _ := client.(ExtendedClient)
-	userClient, _ := client.(UserClient)
-	eventsClient, _ := client.(EventsClient)
+	extendedClient, ok := client.(ExtendedClient)
+	if !ok {
+		log.Printf("[Cache] Client does not implement ExtendedClient interface (GetMergeRequests/GetIssues not available)")
+	}
+
+	userClient, ok := client.(UserClient)
+	if !ok {
+		log.Printf("[Cache] Client does not implement UserClient interface (GetCurrentUser not available)")
+	}
+
+	eventsClient, ok := client.(EventsClient)
+	if !ok {
+		log.Printf("[Cache] Client does not implement EventsClient interface (GetEvents not available)")
+	}
 
 	return &StaleCachingClient{
 		client:         client,

@@ -593,9 +593,13 @@ func (s *PipelineService) getAllProjectsLocked(ctx context.Context) ([]domain.Pr
 	wg.Wait()
 	close(errChan)
 
-	// Check for errors
-	if len(errChan) > 0 {
-		return nil, <-errChan
+	// Collect all errors from closed channel
+	var errs []error
+	for err := range errChan {
+		errs = append(errs, err)
+	}
+	if len(errs) > 0 {
+		return nil, errs[0]
 	}
 
 	// Filter projects based on whitelist
@@ -722,9 +726,7 @@ func (s *PipelineService) GetRepositoriesWithRecentRuns(ctx context.Context, run
 		return nil, fmt.Errorf("failed to get projects: %w", err)
 	}
 
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
+	// No need for lock here - getClientForPlatform has its own lock
 	var results []RepositoryWithRuns
 	var mu sync.Mutex
 	var wg sync.WaitGroup
@@ -799,9 +801,7 @@ func (s *PipelineService) GetRecentPipelines(ctx context.Context, totalLimit int
 		return nil, fmt.Errorf("failed to get projects: %w", err)
 	}
 
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
+	// No need for lock here - getClientForPlatform has its own lock
 	var allPipelines []domain.Pipeline
 	var mu sync.Mutex
 	var wg sync.WaitGroup

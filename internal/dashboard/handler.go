@@ -534,7 +534,7 @@ func (h *Handler) handleAvatar(w http.ResponseWriter, r *http.Request) {
 			contentType = "image/jpeg"
 		} else if len(imageData) > 8 && imageData[0] == 0x89 && imageData[1] == 0x50 && imageData[2] == 0x4E && imageData[3] == 0x47 {
 			contentType = "image/png"
-		} else if len(imageData) > 5 && string(imageData[0:6]) == "GIF89a" || string(imageData[0:6]) == "GIF87a" {
+		} else if len(imageData) > 5 && (string(imageData[0:6]) == "GIF89a" || string(imageData[0:6]) == "GIF87a") {
 			contentType = "image/gif"
 		}
 	}
@@ -606,6 +606,13 @@ func (h *Handler) cacheAvatar(platform, username, email, avatarURL string) {
 
 	// Store in cache with 24 hour TTL
 	h.avatarCacheMu.Lock()
+	defer h.avatarCacheMu.Unlock()
+
+	// Double-check: another goroutine might have cached this while we were downloading
+	if _, exists := h.avatarCache[cacheKey]; exists {
+		h.logger.Printf("avatar already cached for %s (race prevented)", username)
+		return
+	}
 
 	// Evict oldest entry if cache is full
 	if len(h.avatarCache) >= MaxAvatarCacheSize {
@@ -618,7 +625,6 @@ func (h *Handler) cacheAvatar(platform, username, email, avatarURL string) {
 		expiresAt:      now.Add(AvatarCacheTTL),
 		lastAccessTime: now,
 	}
-	h.avatarCacheMu.Unlock()
 
 	h.logger.Printf("cached avatar for %s (%s)", username, platform)
 }
