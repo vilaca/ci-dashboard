@@ -240,6 +240,14 @@ func (h *Handler) handleRepositoriesBulk(w http.ResponseWriter, r *http.Request)
 			h.logger.Printf("Failed to get default branch for project %s: %v", project.Name, err)
 		}
 
+		// Debug logging for missing commit data
+		if defaultBranch == nil {
+			h.logger.Printf("[DEBUG] %s: defaultBranch is nil", project.Name)
+		} else if defaultBranch.CommitAuthor == "" || defaultBranch.LastCommitDate.IsZero() {
+			h.logger.Printf("[DEBUG] %s: Missing data - Author: %q, Date: %v, Branch: %s",
+				project.Name, defaultBranch.CommitAuthor, defaultBranch.LastCommitDate, defaultBranch.Name)
+		}
+
 		// Fetch cached MRs for this project
 		mrs, err := h.pipelineService.GetMergeRequestsForProject(ctx, project)
 		if err != nil {
