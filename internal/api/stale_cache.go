@@ -239,25 +239,27 @@ func getCached[T any](cache *StaleCache, key string, defaultValue T) (T, bool) {
 }
 
 // GetProjects retrieves projects with stale-while-revalidate caching.
+// CACHE-ONLY: Returns cached data or empty slice. Never triggers API calls.
 func (c *StaleCachingClient) GetProjects(ctx context.Context) ([]domain.Project, error) {
 	key := "GetProjects"
 	projects, found := getCached(c.cache, key, []domain.Project{})
 	if found {
 		return projects, nil
 	}
-	// Cache miss - fetch from underlying client
-	return c.client.GetProjects(ctx)
+	// Cache miss - return empty slice (background refresher will populate)
+	return []domain.Project{}, nil
 }
 
 // GetLatestPipeline retrieves the latest pipeline with stale-while-revalidate caching.
+// CACHE-ONLY: Returns cached data or nil. Never triggers API calls.
 func (c *StaleCachingClient) GetLatestPipeline(ctx context.Context, projectID, branch string) (*domain.Pipeline, error) {
 	key := fmt.Sprintf("GetLatestPipeline:%s:%s", projectID, branch)
 	pipeline, found := getCached(c.cache, key, (*domain.Pipeline)(nil))
 	if found {
 		return pipeline, nil
 	}
-	// Cache miss - fetch from underlying client
-	return c.client.GetLatestPipeline(ctx, projectID, branch)
+	// Cache miss - return nil (background refresher will populate)
+	return nil, nil
 }
 
 // Implement other Client methods...
@@ -271,8 +273,8 @@ func (c *StaleCachingClient) GetProjectCount(ctx context.Context) (int, error) {
 	if found {
 		return count, nil
 	}
-	// Cache miss - fetch from underlying client
-	return c.client.GetProjectCount(ctx)
+	// Cache miss - return 0 (background refresher will populate)
+	return 0, nil
 }
 
 func (c *StaleCachingClient) GetPipelines(ctx context.Context, projectID string, limit int) ([]domain.Pipeline, error) {
@@ -281,8 +283,8 @@ func (c *StaleCachingClient) GetPipelines(ctx context.Context, projectID string,
 	if found {
 		return pipelines, nil
 	}
-	// Cache miss - fetch from underlying client
-	return c.client.GetPipelines(ctx, projectID, limit)
+	// Cache miss - return empty slice (background refresher will populate)
+	return []domain.Pipeline{}, nil
 }
 
 func (c *StaleCachingClient) GetBranches(ctx context.Context, projectID string, limit int) ([]domain.Branch, error) {
@@ -291,8 +293,8 @@ func (c *StaleCachingClient) GetBranches(ctx context.Context, projectID string, 
 	if found {
 		return branches, nil
 	}
-	// Cache miss - fetch from underlying client
-	return c.client.GetBranches(ctx, projectID, limit)
+	// Cache miss - return empty slice (background refresher will populate)
+	return []domain.Branch{}, nil
 }
 
 func (c *StaleCachingClient) GetBranch(ctx context.Context, projectID, branchName string) (*domain.Branch, error) {
@@ -301,14 +303,15 @@ func (c *StaleCachingClient) GetBranch(ctx context.Context, projectID, branchNam
 	if found {
 		return branch, nil
 	}
-	// Cache miss - fetch from underlying client
-	return c.client.GetBranch(ctx, projectID, branchName)
+	// Cache miss - return nil (background refresher will populate)
+	return nil, nil
 }
 
 // GetMergeRequests with caching
+// CACHE-ONLY: Returns cached data or empty slice. Never triggers API calls.
 func (c *StaleCachingClient) GetMergeRequests(ctx context.Context, projectID string) ([]domain.MergeRequest, error) {
 	if c.extendedClient == nil {
-		return nil, fmt.Errorf("underlying client does not support GetMergeRequests")
+		return []domain.MergeRequest{}, nil
 	}
 
 	key := fmt.Sprintf("GetMergeRequests:%s", projectID)
@@ -316,14 +319,15 @@ func (c *StaleCachingClient) GetMergeRequests(ctx context.Context, projectID str
 	if found {
 		return mrs, nil
 	}
-	// Cache miss - fetch from underlying client
-	return c.extendedClient.GetMergeRequests(ctx, projectID)
+	// Cache miss - return empty slice (background refresher will populate)
+	return []domain.MergeRequest{}, nil
 }
 
 // GetIssues with caching
+// CACHE-ONLY: Returns cached data or empty slice. Never triggers API calls.
 func (c *StaleCachingClient) GetIssues(ctx context.Context, projectID string) ([]domain.Issue, error) {
 	if c.extendedClient == nil {
-		return nil, fmt.Errorf("underlying client does not support GetIssues")
+		return []domain.Issue{}, nil
 	}
 
 	key := fmt.Sprintf("GetIssues:%s", projectID)
@@ -331,14 +335,15 @@ func (c *StaleCachingClient) GetIssues(ctx context.Context, projectID string) ([
 	if found {
 		return issues, nil
 	}
-	// Cache miss - fetch from underlying client
-	return c.extendedClient.GetIssues(ctx, projectID)
+	// Cache miss - return empty slice (background refresher will populate)
+	return []domain.Issue{}, nil
 }
 
 // GetCurrentUser with caching
+// CACHE-ONLY: Returns cached data or nil. Never triggers API calls.
 func (c *StaleCachingClient) GetCurrentUser(ctx context.Context) (*domain.UserProfile, error) {
 	if c.userClient == nil {
-		return nil, fmt.Errorf("underlying client does not support GetCurrentUser")
+		return nil, nil
 	}
 
 	key := "GetCurrentUser"
@@ -346,8 +351,8 @@ func (c *StaleCachingClient) GetCurrentUser(ctx context.Context) (*domain.UserPr
 	if found {
 		return user, nil
 	}
-	// Cache miss - fetch from underlying client
-	return c.userClient.GetCurrentUser(ctx)
+	// Cache miss - return nil (background refresher will populate)
+	return nil, nil
 }
 
 // GetEvents retrieves recent events (NOT cached - always fresh for event polling).
