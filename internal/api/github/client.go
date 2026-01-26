@@ -34,7 +34,8 @@ func NewClient(config api.ClientConfig, httpClient api.HTTPClient) *Client {
 	}
 
 	return &Client{
-		BaseClient: api.NewBaseClient(baseURL, config.Token, httpClient),
+		BaseClient:         api.NewBaseClient(baseURL, config.Token, httpClient),
+		rateLimitRemaining: -1, // -1 means "not yet known"
 	}
 }
 
@@ -465,8 +466,9 @@ func (c *Client) waitForRateLimit(ctx context.Context) error {
 	resetTime := c.rateLimitReset
 	c.rateLimitMu.RUnlock()
 
-	// If we have requests remaining or don't know the limit yet, proceed
-	if remaining > 0 || resetTime.IsZero() {
+	// If we haven't checked rate limit yet (-1) or have requests remaining, proceed
+	// Also proceed if reset time is unknown (shouldn't happen but defensive)
+	if remaining < 0 || remaining > 0 || resetTime.IsZero() {
 		return nil
 	}
 
