@@ -430,9 +430,13 @@ func (h *Handler) handleRepositoryDetailAPI(w http.ResponseWriter, r *http.Reque
 		currentUser = h.githubCurrentUser
 	}
 
+	h.logger.Printf("[RepositoryDetail] Filtering for current user: %q (platform: %s)", currentUser, project.Platform)
+
 	// My branches: branches where I'm the last commit author
 	var myBranches []domain.BranchWithPipeline
 	for _, branch := range branches {
+		h.logger.Printf("[RepositoryDetail] Branch %q: CommitAuthor=%q, Match=%v",
+			branch.Branch.Name, branch.Branch.CommitAuthor, branch.Branch.CommitAuthor == currentUser)
 		if branch.Branch.CommitAuthor == currentUser {
 			myBranches = append(myBranches, branch)
 		}
