@@ -367,6 +367,7 @@ func (c *Client) convertBranch(glb gitlabBranch, projectID string) domain.Branch
 		LastCommitMsg:  glb.Commit.Message,
 		LastCommitDate: glb.Commit.CommittedDate,
 		CommitAuthor:   glb.Commit.AuthorName,
+		AuthorEmail:    glb.Commit.AuthorEmail,
 		IsDefault:      glb.Default,
 		IsProtected:    glb.Protected,
 		WebURL:         glb.WebURL,
@@ -446,6 +447,7 @@ type gitlabBranch struct {
 		Message       string    `json:"message"`
 		CommittedDate time.Time `json:"committed_date"`
 		AuthorName    string    `json:"author_name"`
+		AuthorEmail   string    `json:"author_email"`
 	} `json:"commit"`
 }
 
@@ -527,6 +529,14 @@ func (c *Client) GetCurrentUser(ctx context.Context) (*domain.UserProfile, error
 
 // convertMergeRequest converts GitLab MR to domain MergeRequest.
 func (c *Client) convertMergeRequest(glMR gitlabMergeRequest, projectID string) domain.MergeRequest {
+	// Extract reviewer usernames
+	reviewers := make([]string, 0, len(glMR.Reviewers))
+	for _, reviewer := range glMR.Reviewers {
+		if reviewer.Username != "" {
+			reviewers = append(reviewers, reviewer.Username)
+		}
+	}
+
 	return domain.MergeRequest{
 		ID:           fmt.Sprintf("%d", glMR.IID),
 		Number:       glMR.IID,
@@ -537,6 +547,7 @@ func (c *Client) convertMergeRequest(glMR gitlabMergeRequest, projectID string) 
 		SourceBranch: glMR.SourceBranch,
 		TargetBranch: glMR.TargetBranch,
 		Author:       glMR.Author.Username,
+		Reviewers:    reviewers,
 		CreatedAt:    glMR.CreatedAt,
 		UpdatedAt:    glMR.UpdatedAt,
 		WebURL:       glMR.WebURL,
@@ -574,17 +585,18 @@ func (c *Client) convertIssue(glIssue gitlabIssue, projectID string) domain.Issu
 
 // GitLab MergeRequest type
 type gitlabMergeRequest struct {
-	IID          int        `json:"iid"`
-	Title        string     `json:"title"`
-	Description  string     `json:"description"`
-	State        string     `json:"state"`
-	Draft        bool       `json:"draft"` // true if MR is in draft/WIP mode
-	SourceBranch string     `json:"source_branch"`
-	TargetBranch string     `json:"target_branch"`
-	Author       gitlabUser `json:"author"`
-	CreatedAt    time.Time  `json:"created_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
-	WebURL       string     `json:"web_url"`
+	IID          int          `json:"iid"`
+	Title        string       `json:"title"`
+	Description  string       `json:"description"`
+	State        string       `json:"state"`
+	Draft        bool         `json:"draft"` // true if MR is in draft/WIP mode
+	SourceBranch string       `json:"source_branch"`
+	TargetBranch string       `json:"target_branch"`
+	Author       gitlabUser   `json:"author"`
+	Reviewers    []gitlabUser `json:"reviewers"` // Reviewers assigned to this MR
+	CreatedAt    time.Time    `json:"created_at"`
+	UpdatedAt    time.Time    `json:"updated_at"`
+	WebURL       string       `json:"web_url"`
 }
 
 // GitLab Issue type

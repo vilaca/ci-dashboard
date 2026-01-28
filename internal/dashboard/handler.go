@@ -435,9 +435,10 @@ func (h *Handler) handleRepositoryDetailAPI(w http.ResponseWriter, r *http.Reque
 	// My branches: branches where I'm the last commit author
 	var myBranches []domain.BranchWithPipeline
 	for _, branch := range branches {
-		h.logger.Printf("[RepositoryDetail] Branch %q: CommitAuthor=%q, Match=%v",
-			branch.Branch.Name, branch.Branch.CommitAuthor, branch.Branch.CommitAuthor == currentUser)
-		if branch.Branch.CommitAuthor == currentUser {
+		isMyBranch := h.isBranchAuthor(branch.Branch, currentUser, project.Platform)
+		h.logger.Printf("[RepositoryDetail] Branch %q: CommitAuthor=%q, AuthorEmail=%q, Match=%v",
+			branch.Branch.Name, branch.Branch.CommitAuthor, branch.Branch.AuthorEmail, isMyBranch)
+		if isMyBranch {
 			myBranches = append(myBranches, branch)
 		}
 	}
@@ -791,6 +792,44 @@ func (h *Handler) getUserRole(project *domain.Project) string {
 	}
 
 	return "Unknown"
+}
+
+// isBranchAuthor checks if the branch was authored by the current user.
+// For GitHub: matches by username in CommitAuthor
+// For GitLab: matches by email in AuthorEmail (since GitLab branches only return author name, not username)
+func (h *Handler) isBranchAuthor(branch domain.Branch, currentUser string, platform string) bool {
+	if currentUser == "" {
+		return false
+	}
+
+	if platform == domain.PlatformGitHub {
+		// GitHub provides username in CommitAuthor
+		return branch.CommitAuthor == currentUser
+	}
+
+	if platform == domain.PlatformGitLab {
+		// GitLab only provides author name and email in branches endpoint
+		// Match by email (e.g., GITLAB_USER=john.doe, AuthorEmail=john.doe@company.com)
+		// Support matching: username@domain or full email
+		if branch.AuthorEmail == "" {
+			return false
+		}
+
+		// Extract username from email (part before @)
+		emailParts := strings.Split(branch.AuthorEmail, "@")
+		if len(emailParts) > 0 {
+			emailUsername := emailParts[0]
+			// Match if currentUser equals either the full email or the email username
+			if branch.AuthorEmail == currentUser || emailUsername == currentUser {
+				return true
+			}
+		}
+
+		// Also try matching the full name directly (in case user configured full name)
+		return branch.CommitAuthor == currentUser
+	}
+
+	return false
 }
 
 // StdLogger wraps the standard log package to implement Logger interface.

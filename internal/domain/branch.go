@@ -11,7 +11,8 @@ type Branch struct {
 	LastCommitSHA  string
 	LastCommitMsg  string
 	LastCommitDate time.Time
-	CommitAuthor   string // Author of the last commit
+	CommitAuthor   string // Author of the last commit (username for GitHub, full name for GitLab)
+	AuthorEmail    string // Author email (for matching when username not available)
 	IsDefault      bool   // Is this the default branch (main/master)?
 	IsProtected    bool   // Is this branch protected?
 	WebURL         string // Link to branch in GitLab/GitHub
