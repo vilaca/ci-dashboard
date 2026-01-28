@@ -72,21 +72,27 @@ func filterOpenBranches(branches []domain.Branch) []domain.Branch {
 	filtered := make([]domain.Branch, 0, len(branches))
 	cutoffDate := time.Now().Add(-60 * 24 * time.Hour) // 60 days ago
 
+	log.Printf("[filterOpenBranches] Input: %d branches, cutoff date: %v", len(branches), cutoffDate)
+
 	for _, branch := range branches {
 		// Skip default branches (main/master)
 		if branch.IsDefault {
+			log.Printf("[filterOpenBranches] Skipping default branch: %s", branch.Name)
 			continue
 		}
 
 		// Skip branches with no recent activity (older than 60 days)
 		if !branch.LastCommitDate.IsZero() && branch.LastCommitDate.Before(cutoffDate) {
+			log.Printf("[filterOpenBranches] Skipping stale branch: %s (last commit: %v)", branch.Name, branch.LastCommitDate)
 			continue
 		}
 
+		log.Printf("[filterOpenBranches] Including active branch: %s (last commit: %v)", branch.Name, branch.LastCommitDate)
 		// This is an open/active branch
 		filtered = append(filtered, branch)
 	}
 
+	log.Printf("[filterOpenBranches] Output: %d branches (filtered out %d)", len(filtered), len(branches)-len(filtered))
 	return filtered
 }
 
@@ -412,7 +418,7 @@ func (s *PipelineService) GetPipelinesForProject(ctx context.Context, projectID 
 
 // GetBranchesForProject retrieves open/active branches with pipelines for a single project.
 // Only returns branches that are:
-// - Not the default branch (main/master)
+// - Not the default branch (main/master) - COMMENTED OUT FOR NOW
 // - Have recent activity (commits within last 60 days)
 func (s *PipelineService) GetBranchesForProject(ctx context.Context, project domain.Project, limit int) ([]domain.BranchWithPipeline, error) {
 	s.mu.RLock()
@@ -429,11 +435,13 @@ func (s *PipelineService) GetBranchesForProject(ctx context.Context, project dom
 		return nil, err
 	}
 
+	log.Printf("[GetBranchesForProject] Fetched %d branches for %s", len(branches), project.Name)
+
 	// Fill in repository name
 	fixBranchRepositoryNames(branches, project)
 
-	// Filter to only open/active branches
-	branches = filterOpenBranches(branches)
+	// TEMPORARILY DISABLED: Filter to only open/active branches
+	// branches = filterOpenBranches(branches)
 
 	// Get pipeline for each branch
 	var results []domain.BranchWithPipeline
@@ -712,14 +720,19 @@ func (s *PipelineService) getAllProjectsLocked(ctx context.Context) ([]domain.Pr
 
 	// Filter projects by user membership (if enabled)
 	if s.filterUserRepos {
+		log.Printf("[PipelineService] FILTER_USER_REPOS is ENABLED - filtering %d repositories", len(allProjects))
 		filtered := make([]domain.Project, 0, len(allProjects))
 		for _, project := range allProjects {
-			if s.hasUserMembership(project) {
+			hasMembership := s.hasUserMembership(project)
+			log.Printf("[PipelineService] Repository %s: hasMembership=%v, Permissions=%+v", project.Name, hasMembership, project.Permissions)
+			if hasMembership {
 				filtered = append(filtered, project)
 			}
 		}
 		log.Printf("[PipelineService] Filtered to %d repositories with user membership (from %d total)", len(filtered), len(allProjects))
 		allProjects = filtered
+	} else {
+		log.Printf("[PipelineService] FILTER_USER_REPOS is DISABLED - showing all %d repositories", len(allProjects))
 	}
 
 	return allProjects, nil
