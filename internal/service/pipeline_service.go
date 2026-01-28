@@ -38,16 +38,19 @@ type PipelineService struct {
 	clients          map[string]api.Client // platform name -> client
 	gitlabWhitelist  []string              // allowed GitLab repository IDs (nil = allow all)
 	githubWhitelist  []string              // allowed GitHub repository IDs (nil = allow all)
+	filterUserRepos  bool                  // if true, only fetch repositories where user has membership
 	mu               sync.RWMutex
 }
 
 // NewPipelineService creates a new pipeline service.
 // gitlabWhitelist and githubWhitelist restrict access to specified repositories (nil = allow all).
-func NewPipelineService(gitlabWhitelist, githubWhitelist []string) *PipelineService {
+// filterUserRepos, when true, only fetches repositories where user has membership (default: true).
+func NewPipelineService(gitlabWhitelist, githubWhitelist []string, filterUserRepos bool) *PipelineService {
 	return &PipelineService{
 		clients:         make(map[string]api.Client),
 		gitlabWhitelist: gitlabWhitelist,
 		githubWhitelist: githubWhitelist,
+		filterUserRepos: filterUserRepos,
 	}
 }
 
@@ -531,6 +534,30 @@ func (s *PipelineService) isWhitelisted(project domain.Project) bool {
 	return false
 }
 
+// hasUserMembership checks if the user has any membership/permissions in the project.
+// Returns true if the user has any access level (read, write, or admin).
+func (s *PipelineService) hasUserMembership(project domain.Project) bool {
+	// If permissions data is missing, include the project (fail open)
+	if project.Permissions == nil {
+		return true
+	}
+
+	switch project.Platform {
+	case "gitlab":
+		// GitLab: AccessLevel > 0 means user has some access
+		// 10=Guest, 20=Reporter, 30=Developer, 40=Maintainer, 50=Owner
+		return project.Permissions.AccessLevel > 0
+
+	case "github":
+		// GitHub: Any of Admin, Push, or Pull permission means user has access
+		return project.Permissions.Admin || project.Permissions.Push || project.Permissions.Pull
+
+	default:
+		// Unknown platform - include by default
+		return true
+	}
+}
+
 // GetTotalProjectCount retrieves the total count of projects from all configured platforms.
 func (s *PipelineService) GetTotalProjectCount(ctx context.Context) (int, error) {
 	s.mu.RLock()
@@ -649,6 +676,18 @@ func (s *PipelineService) getAllProjectsLocked(ctx context.Context) ([]domain.Pr
 				filtered = append(filtered, project)
 			}
 		}
+		allProjects = filtered
+	}
+
+	// Filter projects by user membership (if enabled)
+	if s.filterUserRepos {
+		filtered := make([]domain.Project, 0, len(allProjects))
+		for _, project := range allProjects {
+			if s.hasUserMembership(project) {
+				filtered = append(filtered, project)
+			}
+		}
+		log.Printf("[PipelineService] Filtered to %d repositories with user membership (from %d total)", len(filtered), len(allProjects))
 		allProjects = filtered
 	}
 

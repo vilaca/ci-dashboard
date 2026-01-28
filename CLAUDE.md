@@ -338,6 +338,10 @@ GITHUB_TOKEN=ghp_xxxxxxxxxxxx               # GitHub personal access token with 
 # Optional: Specific repos to watch (otherwise shows all)
 WATCHED_REPOS=123,456                        # GitLab project IDs
 WATCHED_REPOS=owner/repo1,owner/repo2        # GitHub repos
+
+# Repository filtering
+FILTER_USER_REPOS=true                       # Only show repos where user has membership (default: true)
+                                             # Set to false or 0 to show all repos
 ```
 
 **Security: Token Scopes (Read-Only)**

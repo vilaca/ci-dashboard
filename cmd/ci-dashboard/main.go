@@ -132,10 +132,11 @@ func buildServer(cfg *config.Config) (http.Handler, *dashboard.Handler, *service
 		Timeout: 30 * time.Second, // Set reasonable timeout for API requests
 	}
 
-	// Create pipeline service with whitelists
+	// Create pipeline service with whitelists and user filter
 	pipelineService := service.NewPipelineService(
 		cfg.GetGitLabWatchedRepos(),
 		cfg.GetGitHubWatchedRepos(),
+		cfg.FilterUserRepos,
 	)
 
 	// Register CI clients based on configuration with stale-while-revalidate caching

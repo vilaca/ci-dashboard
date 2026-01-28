@@ -58,6 +58,9 @@ type Config struct {
 	// Current user configuration (for filtering "your branches")
 	GitLabCurrentUser string // GitLab username for filtering branches (from GITLAB_USER)
 	GitHubCurrentUser string // GitHub username for filtering branches (from GITHUB_USER)
+
+	// Repository filtering
+	FilterUserRepos bool // If true, only fetch repositories where user has membership (default: false)
 }
 
 // yamlConfig represents the YAML file structure.
@@ -90,6 +93,9 @@ type yamlConfig struct {
 	UI struct {
 		RefreshIntervalSeconds int `yaml:"refresh_interval_seconds"`
 	} `yaml:"ui"`
+	Filter struct {
+		UserRepos bool `yaml:"user_repos"`
+	} `yaml:"filter"`
 }
 
 // loadIntConfig loads an integer configuration value with fallback priority:
@@ -224,6 +230,14 @@ func Load() (*Config, error) {
 
 	backgroundRefreshInterval := loadIntConfig("BACKGROUND_REFRESH_INTERVAL_SECONDS", yc.Background.RefreshIntervalSeconds, DefaultBackgroundRefreshSeconds, func(v int) bool { return v > 0 })
 
+	// Load filter configuration (enabled by default)
+	// Priority: Environment variable -> Default (true)
+	// To disable, set FILTER_USER_REPOS=false or FILTER_USER_REPOS=0
+	filterUserRepos := true
+	if envFilter := os.Getenv("FILTER_USER_REPOS"); envFilter != "" {
+		filterUserRepos = envFilter == "true" || envFilter == "1"
+	}
+
 	return &Config{
 		Port:                             port,
 		GitLabURL:                        gitlabURL,
@@ -241,6 +255,7 @@ func Load() (*Config, error) {
 		UIRefreshIntervalSeconds:         uiRefreshInterval,
 		GitLabCurrentUser:                gitlabCurrentUser,
 		GitHubCurrentUser:                githubCurrentUser,
+		FilterUserRepos:                  filterUserRepos,
 	}, nil
 }
 
