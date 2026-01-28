@@ -208,27 +208,42 @@ func (c *Client) GetPipelines(ctx context.Context, projectID string, limit int) 
 	return result.([]domain.Pipeline), nil
 }
 
-// GetBranches retrieves branches for a project.
+// GetBranches retrieves all branches for a project (with pagination).
+// limit parameter is ignored - fetches all branches.
 func (c *Client) GetBranches(ctx context.Context, projectID string, limit int) ([]domain.Branch, error) {
-	perPage := limit
-	if perPage == 0 || perPage > 100 {
-		perPage = 100
-	}
-
 	result, err := c.DoRateLimited(ctx, func() (interface{}, error) {
-		url := fmt.Sprintf("%s/api/v4/projects/%s/repository/branches?per_page=%d", c.BaseURL, projectID, perPage)
+		var allBranches []domain.Branch
+		page := 1
+		perPage := 100
 
-		var glBranches []gitlabBranch
-		if err := c.doRequest(ctx, url, &glBranches); err != nil {
-			return nil, fmt.Errorf("failed to get branches (URL: %s): %w", url, err)
+		for {
+			url := fmt.Sprintf("%s/api/v4/projects/%s/repository/branches?per_page=%d&page=%d",
+				c.BaseURL, projectID, perPage, page)
+
+			var glBranches []gitlabBranch
+			if err := c.doRequest(ctx, url, &glBranches); err != nil {
+				return nil, fmt.Errorf("failed to get branches (page %d): %w", page, err)
+			}
+
+			// No more results
+			if len(glBranches) == 0 {
+				break
+			}
+
+			// Convert and append
+			for _, glb := range glBranches {
+				allBranches = append(allBranches, c.convertBranch(glb, projectID))
+			}
+
+			// If we got fewer results than perPage, we're on the last page
+			if len(glBranches) < perPage {
+				break
+			}
+
+			page++
 		}
 
-		branches := make([]domain.Branch, len(glBranches))
-		for i, glb := range glBranches {
-			branches[i] = c.convertBranch(glb, projectID)
-		}
-
-		return branches, nil
+		return allBranches, nil
 	})
 
 	if err != nil {
@@ -451,22 +466,41 @@ type gitlabBranch struct {
 	} `json:"commit"`
 }
 
-// GetMergeRequests retrieves open merge requests for a project.
+// GetMergeRequests retrieves all open merge requests for a project (with pagination).
 func (c *Client) GetMergeRequests(ctx context.Context, projectID string) ([]domain.MergeRequest, error) {
 	result, err := c.DoRateLimited(ctx, func() (interface{}, error) {
-		url := fmt.Sprintf("%s/api/v4/projects/%s/merge_requests?state=opened&per_page=50", c.BaseURL, projectID)
+		var allMRs []domain.MergeRequest
+		page := 1
+		perPage := 100
 
-		var glMRs []gitlabMergeRequest
-		if err := c.doRequest(ctx, url, &glMRs); err != nil {
-			return nil, fmt.Errorf("failed to get merge requests: %w", err)
+		for {
+			url := fmt.Sprintf("%s/api/v4/projects/%s/merge_requests?state=opened&per_page=%d&page=%d&order_by=updated_at&sort=desc",
+				c.BaseURL, projectID, perPage, page)
+
+			var glMRs []gitlabMergeRequest
+			if err := c.doRequest(ctx, url, &glMRs); err != nil {
+				return nil, fmt.Errorf("failed to get merge requests (page %d): %w", page, err)
+			}
+
+			// No more results
+			if len(glMRs) == 0 {
+				break
+			}
+
+			// Convert and append
+			for _, glMR := range glMRs {
+				allMRs = append(allMRs, c.convertMergeRequest(glMR, projectID))
+			}
+
+			// If we got fewer results than perPage, we're on the last page
+			if len(glMRs) < perPage {
+				break
+			}
+
+			page++
 		}
 
-		mrs := make([]domain.MergeRequest, len(glMRs))
-		for i, glMR := range glMRs {
-			mrs[i] = c.convertMergeRequest(glMR, projectID)
-		}
-
-		return mrs, nil
+		return allMRs, nil
 	})
 
 	if err != nil {

@@ -263,11 +263,6 @@ func (c *Client) GetWorkflowRuns(ctx context.Context, projectID string, workflow
 
 // GetBranches retrieves branches for a repository.
 func (c *Client) GetBranches(ctx context.Context, projectID string, limit int) ([]domain.Branch, error) {
-	perPage := limit
-	if perPage == 0 || perPage > 100 {
-		perPage = 100
-	}
-
 	result, err := c.DoRateLimited(ctx, func() (interface{}, error) {
 		// First, get repository info to find the default branch
 		repoURL := fmt.Sprintf("%s/repos/%s", c.BaseURL, projectID)
@@ -278,36 +273,54 @@ func (c *Client) GetBranches(ctx context.Context, projectID string, limit int) (
 		}
 		defaultBranch := repo.DefaultBranch
 
-		// Get branches
-		url := fmt.Sprintf("%s/repos/%s/branches?per_page=%d", c.BaseURL, projectID, perPage)
+		// Fetch all branches with pagination
+		var allBranches []domain.Branch
+		page := 1
+		perPage := 100
 
-		var ghBranches []githubBranch
-		if err := c.doRequest(ctx, url, &ghBranches); err != nil {
-			return nil, fmt.Errorf("failed to get branches (URL: %s): %w", url, err)
-		}
+		for {
+			url := fmt.Sprintf("%s/repos/%s/branches?per_page=%d&page=%d", c.BaseURL, projectID, perPage, page)
 
-		branches := make([]domain.Branch, len(ghBranches))
-		for i, ghb := range ghBranches {
-			isDefault := (defaultBranch != "" && ghb.Name == defaultBranch)
-
-			// Only fetch commit details for the default branch to conserve API rate limits
-			// Non-default branches will be fetched on-demand if needed via GetBranch()
-			if isDefault {
-				commitURL := fmt.Sprintf("%s/repos/%s/commits/%s", c.BaseURL, projectID, ghb.Commit.SHA)
-				var commitDetails githubCommit
-				if err := c.doRequest(ctx, commitURL, &commitDetails); err != nil {
-					log.Printf("[GitHub] Failed to get commit details for %s/%s (URL: %s): %v", projectID, ghb.Name, commitURL, err)
-					branches[i] = c.convertBranch(ghb, projectID, nil, isDefault)
-				} else {
-					branches[i] = c.convertBranch(ghb, projectID, &commitDetails, isDefault)
-				}
-			} else {
-				// Non-default branch - no commit details to save API calls
-				branches[i] = c.convertBranch(ghb, projectID, nil, isDefault)
+			var ghBranches []githubBranch
+			if err := c.doRequest(ctx, url, &ghBranches); err != nil {
+				return nil, fmt.Errorf("failed to get branches (page %d): %w", page, err)
 			}
+
+			// No more results
+			if len(ghBranches) == 0 {
+				break
+			}
+
+			// Convert branches
+			for _, ghb := range ghBranches {
+				isDefault := (defaultBranch != "" && ghb.Name == defaultBranch)
+
+				// Only fetch commit details for the default branch to conserve API rate limits
+				// Non-default branches will be fetched on-demand if needed via GetBranch()
+				if isDefault {
+					commitURL := fmt.Sprintf("%s/repos/%s/commits/%s", c.BaseURL, projectID, ghb.Commit.SHA)
+					var commitDetails githubCommit
+					if err := c.doRequest(ctx, commitURL, &commitDetails); err != nil {
+						log.Printf("[GitHub] Failed to get commit details for %s/%s (URL: %s): %v", projectID, ghb.Name, commitURL, err)
+						allBranches = append(allBranches, c.convertBranch(ghb, projectID, nil, isDefault))
+					} else {
+						allBranches = append(allBranches, c.convertBranch(ghb, projectID, &commitDetails, isDefault))
+					}
+				} else {
+					// Non-default branch - no commit details to save API calls
+					allBranches = append(allBranches, c.convertBranch(ghb, projectID, nil, isDefault))
+				}
+			}
+
+			// If we got fewer results than perPage, we're on the last page
+			if len(ghBranches) < perPage {
+				break
+			}
+
+			page++
 		}
 
-		return branches, nil
+		return allBranches, nil
 	})
 
 	if err != nil {
@@ -729,23 +742,42 @@ type githubCommit struct {
 	} `json:"commit"`
 }
 
-// GetMergeRequests retrieves open pull requests for a repository.
+// GetMergeRequests retrieves all open pull requests for a repository (with pagination).
 func (c *Client) GetMergeRequests(ctx context.Context, projectID string) ([]domain.MergeRequest, error) {
 	result, err := c.DoRateLimited(ctx, func() (interface{}, error) {
 		// projectID format: "owner/repo"
-		url := fmt.Sprintf("%s/repos/%s/pulls?state=open&per_page=50", c.BaseURL, projectID)
+		var allPRs []domain.MergeRequest
+		page := 1
+		perPage := 100
 
-		var ghPRs []githubPullRequest
-		if err := c.doRequest(ctx, url, &ghPRs); err != nil {
-			return nil, fmt.Errorf("failed to get pull requests: %w", err)
+		for {
+			url := fmt.Sprintf("%s/repos/%s/pulls?state=open&per_page=%d&page=%d&sort=updated&direction=desc",
+				c.BaseURL, projectID, perPage, page)
+
+			var ghPRs []githubPullRequest
+			if err := c.doRequest(ctx, url, &ghPRs); err != nil {
+				return nil, fmt.Errorf("failed to get pull requests (page %d): %w", page, err)
+			}
+
+			// No more results
+			if len(ghPRs) == 0 {
+				break
+			}
+
+			// Convert and append
+			for _, pr := range ghPRs {
+				allPRs = append(allPRs, c.convertPullRequest(pr, projectID))
+			}
+
+			// If we got fewer results than perPage, we're on the last page
+			if len(ghPRs) < perPage {
+				break
+			}
+
+			page++
 		}
 
-		mrs := make([]domain.MergeRequest, len(ghPRs))
-		for i, pr := range ghPRs {
-			mrs[i] = c.convertPullRequest(pr, projectID)
-		}
-
-		return mrs, nil
+		return allPRs, nil
 	})
 
 	if err != nil {
