@@ -4,7 +4,6 @@ import (
 	"io"
 
 	"github.com/vilaca/ci-dashboard/internal/domain"
-	"github.com/vilaca/ci-dashboard/internal/service"
 )
 
 // Renderer handles rendering responses to HTTP clients.
@@ -12,7 +11,7 @@ import (
 type Renderer interface {
 	RenderHealth(w io.Writer) error
 	RenderRepositoriesSkeleton(w io.Writer, userProfiles []domain.UserProfile, refreshInterval int) error
-	RenderRepositoryDetail(w io.Writer, repository service.RepositoryWithRuns, mrs []domain.MergeRequest, issues []domain.Issue) error
+	RenderRepositoryDetail(w io.Writer, detail PersonalizedRepositoryDetail) error
 	RenderRepositoryDetailSkeleton(w io.Writer, repositoryID string) error
 }
 

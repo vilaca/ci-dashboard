@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/vilaca/ci-dashboard/internal/domain"
-	"github.com/vilaca/ci-dashboard/internal/service"
 )
 
 // formatDuration formats a duration into human-readable format.
@@ -166,28 +165,22 @@ func (r *HTMLRenderer) RenderRepositoryDetailSkeleton(w io.Writer, repositoryID 
 	return err
 }
 
-// RenderRepositoryDetail renders the detail page for a single repository.
+// RenderRepositoryDetail renders the detail page for a single repository with personalized user involvement.
 // This renders only the content fragment to be inserted via AJAX.
-func (r *HTMLRenderer) RenderRepositoryDetail(w io.Writer, repository service.RepositoryWithRuns, mrs []domain.MergeRequest, issues []domain.Issue) error {
+func (r *HTMLRenderer) RenderRepositoryDetail(w io.Writer, detail PersonalizedRepositoryDetail) error {
 	var sb strings.Builder
 
-	totalRuns := len(repository.Runs)
+	// Calculate stats from recent pipelines
+	totalRuns := len(detail.RecentPipelines)
 	successCount := 0
 	failedCount := 0
-	var totalDuration time.Duration
 
-	for _, run := range repository.Runs {
+	for _, run := range detail.RecentPipelines {
 		if run.Status == domain.StatusSuccess {
 			successCount++
 		} else if run.Status == domain.StatusFailed {
 			failedCount++
 		}
-		totalDuration += run.Duration
-	}
-
-	var avgDuration time.Duration
-	if totalRuns > 0 {
-		avgDuration = totalDuration / time.Duration(totalRuns)
 	}
 
 	successRate := 0.0
@@ -195,70 +188,75 @@ func (r *HTMLRenderer) RenderRepositoryDetail(w io.Writer, repository service.Re
 		successRate = float64(successCount) / float64(totalRuns) * 100
 	}
 
-	// Just render the content fragment (no full page structure)
+	// Render header with repository name, link, and user role
 	sb.WriteString(fmt.Sprintf(`<h1>%s</h1>
 		<div class="repo-url">
-			%s
+			%s <span style="margin-left: 20px; color: var(--text-secondary);">Your role: <strong>%s</strong></span>
 		</div>
-`, repository.Project.Name, externalLink(repository.Project.WebURL, "View →")))
+`, detail.Project.Name, externalLink(detail.Project.WebURL, "View →"), detail.UserRole))
+
+	// Stats cards
 	sb.WriteString(`
 		<div class="stats-grid">
 			<div class="stat-card">
-				<div class="stat-label">Total Runs</div>
+				<div class="stat-label">My Branches</div>
+				<div class="stat-value">` + fmt.Sprintf("%d", len(detail.MyBranches)) + `</div>
+			</div>
+			<div class="stat-card">
+				<div class="stat-label">Reviewing</div>
+				<div class="stat-value">` + fmt.Sprintf("%d", len(detail.ReviewingMRs)) + `</div>
+			</div>
+			<div class="stat-card">
+				<div class="stat-label">My MRs/PRs</div>
+				<div class="stat-value">` + fmt.Sprintf("%d", len(detail.MyMRs)) + `</div>
+			</div>
+			<div class="stat-card">
+				<div class="stat-label">Recent Runs</div>
 				<div class="stat-value">` + fmt.Sprintf("%d", totalRuns) + `</div>
 			</div>
 			<div class="stat-card">
 				<div class="stat-label">Success Rate</div>
 				<div class="stat-value">` + fmt.Sprintf("%.1f%%", successRate) + `</div>
 			</div>
-			<div class="stat-card">
-				<div class="stat-label">Successful</div>
-				<div class="stat-value">` + fmt.Sprintf("%d", successCount) + `</div>
-			</div>
-			<div class="stat-card">
-				<div class="stat-label">Failed</div>
-				<div class="stat-value">` + fmt.Sprintf("%d", failedCount) + `</div>
-			</div>
-			<div class="stat-card">
-				<div class="stat-label">Average Duration</div>
-				<div class="stat-value">` + formatDuration(avgDuration) + `</div>
-			</div>
 		</div>
 
 		<!-- Tabs -->
 		<div class="tabs">
-			<button class="tab-button active" data-tab="pipelines" onclick="switchTab('pipelines', this)">Pipelines (` + fmt.Sprintf("%d", len(repository.Runs)) + `)</button>
-			<button class="tab-button" data-tab="mrs" onclick="switchTab('mrs', this)">MRs/PRs (` + fmt.Sprintf("%d", len(mrs)) + `)</button>
-			<button class="tab-button" data-tab="issues" onclick="switchTab('issues', this)">Issues (` + fmt.Sprintf("%d", len(issues)) + `)</button>
+			<button class="tab-button active" data-tab="mybranches" onclick="switchTab('mybranches', this)">My Branches (` + fmt.Sprintf("%d", len(detail.MyBranches)) + `)</button>
+			<button class="tab-button" data-tab="reviewing" onclick="switchTab('reviewing', this)">Reviewing (` + fmt.Sprintf("%d", len(detail.ReviewingMRs)) + `)</button>
+			<button class="tab-button" data-tab="mymrs" onclick="switchTab('mymrs', this)">My MRs/PRs (` + fmt.Sprintf("%d", len(detail.MyMRs)) + `)</button>
+			<button class="tab-button" data-tab="activity" onclick="switchTab('activity', this)">Recent Activity (` + fmt.Sprintf("%d", totalRuns) + `)</button>
 		</div>
 
-		<!-- Pipelines Tab -->
-		<div id="pipelines-tab" class="tab-content active">
+		<!-- My Branches Tab -->
+		<div id="mybranches-tab" class="tab-content active">
 			<div class="runs-section">
-				<h2>Recent Pipeline Runs</h2>
+				<h2>My Branches</h2>
+				<p style="color: var(--text-secondary); margin-bottom: 20px;">Branches where you are the last commit author</p>
 `)
 
-	if len(repository.Runs) == 0 {
-		sb.WriteString(`				<p style="color: var(--text-secondary); text-align: center; padding: 40px 0;">No runs found for this repository.</p>`)
+	if len(detail.MyBranches) == 0 {
+		sb.WriteString(`				<p style="color: var(--text-secondary); text-align: center; padding: 40px 0;">You have no active branches in this repository.</p>`)
 	} else {
-		for _, run := range repository.Runs {
-			r.writeRepositoryDetailRun(&sb, run)
+		for _, branch := range detail.MyBranches {
+			r.writeRepositoryDetailBranch(&sb, branch)
 		}
 	}
 
 	sb.WriteString(`			</div>
 		</div>
 
-		<!-- MRs/PRs Tab -->
-		<div id="mrs-tab" class="tab-content">
+		<!-- Reviewing Tab -->
+		<div id="reviewing-tab" class="tab-content">
 			<div class="runs-section">
-				<h2>Open Merge Requests / Pull Requests</h2>
+				<h2>Reviewing</h2>
+				<p style="color: var(--text-secondary); margin-bottom: 20px;">Merge requests where you are assigned as a reviewer</p>
 `)
 
-	if len(mrs) == 0 {
-		sb.WriteString(`				<p style="color: var(--text-secondary); text-align: center; padding: 40px 0;">No open merge requests or pull requests.</p>`)
+	if len(detail.ReviewingMRs) == 0 {
+		sb.WriteString(`				<p style="color: var(--text-secondary); text-align: center; padding: 40px 0;">No merge requests awaiting your review.</p>`)
 	} else {
-		for _, mr := range mrs {
+		for _, mr := range detail.ReviewingMRs {
 			r.writeRepositoryDetailMR(&sb, mr)
 		}
 	}
@@ -266,17 +264,36 @@ func (r *HTMLRenderer) RenderRepositoryDetail(w io.Writer, repository service.Re
 	sb.WriteString(`			</div>
 		</div>
 
-		<!-- Issues Tab -->
-		<div id="issues-tab" class="tab-content">
+		<!-- My MRs Tab -->
+		<div id="mymrs-tab" class="tab-content">
 			<div class="runs-section">
-				<h2>Open Issues</h2>
+				<h2>My Merge Requests / Pull Requests</h2>
+				<p style="color: var(--text-secondary); margin-bottom: 20px;">Merge requests created by you</p>
 `)
 
-	if len(issues) == 0 {
-		sb.WriteString(`				<p style="color: var(--text-secondary); text-align: center; padding: 40px 0;">No open issues.</p>`)
+	if len(detail.MyMRs) == 0 {
+		sb.WriteString(`				<p style="color: var(--text-secondary); text-align: center; padding: 40px 0;">You have no open merge requests in this repository.</p>`)
 	} else {
-		for _, issue := range issues {
-			r.writeRepositoryDetailIssue(&sb, issue)
+		for _, mr := range detail.MyMRs {
+			r.writeRepositoryDetailMR(&sb, mr)
+		}
+	}
+
+	sb.WriteString(`			</div>
+		</div>
+
+		<!-- Recent Activity Tab -->
+		<div id="activity-tab" class="tab-content">
+			<div class="runs-section">
+				<h2>Recent Pipeline Activity</h2>
+				<p style="color: var(--text-secondary); margin-bottom: 20px;">Latest pipeline runs across all branches</p>
+`)
+
+	if totalRuns == 0 {
+		sb.WriteString(`				<p style="color: var(--text-secondary); text-align: center; padding: 40px 0;">No recent pipeline runs found.</p>`)
+	} else {
+		for _, run := range detail.RecentPipelines {
+			r.writeRepositoryDetailRun(&sb, run)
 		}
 	}
 
@@ -286,6 +303,47 @@ func (r *HTMLRenderer) RenderRepositoryDetail(w io.Writer, repository service.Re
 
 	_, err := w.Write([]byte(sb.String()))
 	return err
+}
+
+// writeRepositoryDetailBranch writes a single branch item with pipeline status.
+func (r *HTMLRenderer) writeRepositoryDetailBranch(sb *strings.Builder, branch domain.BranchWithPipeline) {
+	statusBadge := `<span class="status-badge" style="background: var(--border); color: var(--text-secondary);">NO PIPELINE</span>`
+	pipelineInfo := ""
+
+	if branch.Pipeline != nil {
+		statusClass := strings.ToLower(string(branch.Pipeline.Status))
+		statusBadge = fmt.Sprintf(`<span class="status-badge %s">%s</span>`,
+			statusClass, strings.ToUpper(string(branch.Pipeline.Status)))
+		pipelineInfo = fmt.Sprintf(`<span>⏱️ %s</span>
+					<span>⏰ %s</span>
+					%s`,
+			formatDuration(branch.Pipeline.Duration),
+			formatTimeAgo(branch.Pipeline.UpdatedAt),
+			externalLink(branch.Pipeline.WebURL, "Pipeline →"))
+	}
+
+	commitMsg := branch.Branch.LastCommitMsg
+	if len(commitMsg) > 60 {
+		commitMsg = commitMsg[:60] + "..."
+	}
+
+	sb.WriteString(fmt.Sprintf(`			<div class="run-item">
+				<div class="run-left">
+					<div class="run-name">%s</div>
+					<div class="run-branch">%s • Last commit %s</div>
+				</div>
+				<div class="run-meta">
+					%s
+					%s
+					%s
+				</div>
+			</div>
+`, branch.Branch.Name,
+		escapeHTML(commitMsg),
+		formatTimeAgo(branch.Branch.LastCommitDate),
+		pipelineInfo,
+		externalLink(branch.Branch.WebURL, "View Branch →"),
+		statusBadge))
 }
 
 // writeRepositoryDetailRun writes a single run item for the repository detail page.

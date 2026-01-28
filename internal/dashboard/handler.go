@@ -87,6 +87,16 @@ type PipelineService interface {
 // RepositoryWithRuns is imported from service package
 type RepositoryWithRuns = service.RepositoryWithRuns
 
+// PersonalizedRepositoryDetail holds repository data organized by user involvement.
+type PersonalizedRepositoryDetail struct {
+	Project         domain.Project
+	UserRole        string // User's role/permissions in this repository
+	MyBranches      []domain.BranchWithPipeline
+	ReviewingMRs    []domain.MergeRequest
+	MyMRs           []domain.MergeRequest
+	RecentPipelines []domain.Pipeline
+}
+
 // HandlerConfig holds configuration for creating a new Handler
 type HandlerConfig struct {
 	Renderer          Renderer
@@ -378,41 +388,30 @@ func (h *Handler) handleRepositoryDetailAPI(w http.ResponseWriter, r *http.Reque
 
 	h.logger.Printf("[RepositoryDetail] Found project: %s (platform: %s)", project.Name, project.Platform)
 
+	// Determine user's role in this repository
+	userRole := h.getUserRole(project)
+
+	// Get branches for this project
+	branches, err := h.pipelineService.GetBranchesForProject(r.Context(), *project, 200)
+	if err != nil {
+		h.logger.Printf("[RepositoryDetail] failed to get branches for %s: %v", repositoryID, err)
+		branches = []domain.BranchWithPipeline{}
+	}
+
 	// Get pipelines for this specific project (from cache)
 	pipelines, err := h.pipelineService.GetPipelinesForProject(r.Context(), repositoryID, 50)
 	if err != nil {
 		h.logger.Printf("[RepositoryDetail] failed to get pipelines for %s: %v", repositoryID, err)
-		// Continue with empty pipelines
 		pipelines = []domain.Pipeline{}
 	}
 
-	h.logger.Printf("[RepositoryDetail] Found %d pipelines for %s", len(pipelines), repositoryID)
+	h.logger.Printf("[RepositoryDetail] Found %d pipelines and %d branches for %s", len(pipelines), len(branches), repositoryID)
 
-	// Fill in repository name from project
-	for i := range pipelines {
-		if pipelines[i].Repository == "" || pipelines[i].Repository == project.ID {
-			pipelines[i].Repository = project.Name
-		}
-	}
-
-	repository := RepositoryWithRuns{
-		Project: *project,
-		Runs:    pipelines,
-	}
-
-	// Get MRs and Issues for this repository (from cache)
+	// Get MRs for this repository (from cache)
 	allMRs, err := h.pipelineService.GetAllMergeRequests(r.Context())
 	if err != nil {
 		h.logger.Printf("failed to get merge requests: %v", err)
-		// Continue even if MRs fail
 		allMRs = []domain.MergeRequest{}
-	}
-
-	allIssues, err := h.pipelineService.GetAllIssues(r.Context())
-	if err != nil {
-		h.logger.Printf("failed to get issues: %v", err)
-		// Continue even if Issues fail
-		allIssues = []domain.Issue{}
 	}
 
 	// Filter MRs for this repository
@@ -425,22 +424,62 @@ func (h *Handler) handleRepositoryDetailAPI(w http.ResponseWriter, r *http.Reque
 
 	h.logger.Printf("[RepositoryDetail] Found %d MRs for %s", len(repoMRs), repositoryID)
 
-	// Filter Issues for this repository
-	var repoIssues []domain.Issue
-	for _, issue := range allIssues {
-		if issue.ProjectID == repositoryID {
-			repoIssues = append(repoIssues, issue)
+	// Group data by user involvement
+	currentUser := h.gitlabCurrentUser
+	if project.Platform == domain.PlatformGitHub {
+		currentUser = h.githubCurrentUser
+	}
+
+	// My branches: branches where I'm the last commit author
+	var myBranches []domain.BranchWithPipeline
+	for _, branch := range branches {
+		if branch.Branch.CommitAuthor == currentUser {
+			myBranches = append(myBranches, branch)
 		}
 	}
 
-	h.logger.Printf("[RepositoryDetail] Found %d issues for %s", len(repoIssues), repositoryID)
+	// Reviewing MRs: MRs where I'm a reviewer
+	var reviewingMRs []domain.MergeRequest
+	for _, mr := range repoMRs {
+		for _, reviewer := range mr.Reviewers {
+			if reviewer == currentUser {
+				reviewingMRs = append(reviewingMRs, mr)
+				break
+			}
+		}
+	}
 
-	// Cache avatars for users in MRs and Issues
+	// My MRs: MRs where I'm the author
+	var myMRs []domain.MergeRequest
+	for _, mr := range repoMRs {
+		if mr.Author == currentUser {
+			myMRs = append(myMRs, mr)
+		}
+	}
+
+	h.logger.Printf("[RepositoryDetail] User involvement: %d my branches, %d reviewing MRs, %d my MRs",
+		len(myBranches), len(reviewingMRs), len(myMRs))
+
+	// Cache avatars for users in branches and MRs
 	var wg sync.WaitGroup
 	seen := make(map[string]bool)
 
-	// Cache MR authors (all from same repository/platform)
-	for _, mr := range repoMRs {
+	// Cache branch authors
+	for _, branch := range myBranches {
+		key := project.Platform + ":" + branch.Branch.CommitAuthor
+		if !seen[key] && branch.Branch.CommitAuthor != "" {
+			seen[key] = true
+			wg.Add(1)
+			go func(platform, author string) {
+				defer wg.Done()
+				h.cacheAvatar(platform, author, "", "")
+			}(project.Platform, branch.Branch.CommitAuthor)
+		}
+	}
+
+	// Cache MR authors and reviewers
+	for _, mr := range append(reviewingMRs, myMRs...) {
+		// Author
 		key := project.Platform + ":" + mr.Author
 		if !seen[key] && mr.Author != "" {
 			seen[key] = true
@@ -450,26 +489,36 @@ func (h *Handler) handleRepositoryDetailAPI(w http.ResponseWriter, r *http.Reque
 				h.cacheAvatar(platform, author, "", "")
 			}(project.Platform, mr.Author)
 		}
-	}
 
-	// Cache Issue authors (all from same repository/platform)
-	for _, issue := range repoIssues {
-		key := project.Platform + ":" + issue.Author
-		if !seen[key] && issue.Author != "" {
-			seen[key] = true
-			wg.Add(1)
-			go func(platform, author string) {
-				defer wg.Done()
-				h.cacheAvatar(platform, author, "", "")
-			}(project.Platform, issue.Author)
+		// Reviewers
+		for _, reviewer := range mr.Reviewers {
+			key := project.Platform + ":" + reviewer
+			if !seen[key] && reviewer != "" {
+				seen[key] = true
+				wg.Add(1)
+				go func(platform, rev string) {
+					defer wg.Done()
+					h.cacheAvatar(platform, rev, "", "")
+				}(project.Platform, reviewer)
+			}
 		}
 	}
 
 	wg.Wait()
 
+	// Create personalized detail
+	detail := PersonalizedRepositoryDetail{
+		Project:         *project,
+		UserRole:        userRole,
+		MyBranches:      myBranches,
+		ReviewingMRs:    reviewingMRs,
+		MyMRs:           myMRs,
+		RecentPipelines: pipelines,
+	}
+
 	// Render to a buffer to get HTML string
 	var buf strings.Builder
-	if err := h.renderer.RenderRepositoryDetail(&buf, repository, repoMRs, repoIssues); err != nil {
+	if err := h.renderer.RenderRepositoryDetail(&buf, detail); err != nil {
 		h.logger.Printf("[RepositoryDetail] failed to render: %v", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
@@ -697,6 +746,47 @@ func (h *Handler) getGravatarURL(email string) string {
 	email = strings.ToLower(strings.TrimSpace(email))
 	hash := fmt.Sprintf("%x", md5.Sum([]byte(email)))
 	return fmt.Sprintf("https://www.gravatar.com/avatar/%s?s=80&d=identicon", hash)
+}
+
+// getUserRole returns the user's role/permissions in the project.
+func (h *Handler) getUserRole(project *domain.Project) string {
+	if project.Permissions == nil {
+		return "Unknown"
+	}
+
+	if project.Platform == domain.PlatformGitLab {
+		// GitLab access levels: 10=Guest, 20=Reporter, 30=Developer, 40=Maintainer, 50=Owner
+		switch project.Permissions.AccessLevel {
+		case 50:
+			return "Owner"
+		case 40:
+			return "Maintainer"
+		case 30:
+			return "Developer"
+		case 20:
+			return "Reporter"
+		case 10:
+			return "Guest"
+		default:
+			return "No Access"
+		}
+	}
+
+	if project.Platform == domain.PlatformGitHub {
+		// GitHub permissions
+		if project.Permissions.Admin {
+			return "Admin"
+		}
+		if project.Permissions.Push {
+			return "Write"
+		}
+		if project.Permissions.Pull {
+			return "Read"
+		}
+		return "No Access"
+	}
+
+	return "Unknown"
 }
 
 // StdLogger wraps the standard log package to implement Logger interface.
