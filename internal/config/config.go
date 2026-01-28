@@ -60,7 +60,7 @@ type Config struct {
 	GitHubCurrentUser string // GitHub username for filtering branches (from GITHUB_USER)
 
 	// Repository filtering
-	FilterUserRepos bool // If true, only fetch repositories where user has membership (default: false)
+	FilterUserRepos bool // If true, only fetch repositories where user has membership (default: false - disabled until permissions API is fully working)
 }
 
 // yamlConfig represents the YAML file structure.
@@ -230,10 +230,10 @@ func Load() (*Config, error) {
 
 	backgroundRefreshInterval := loadIntConfig("BACKGROUND_REFRESH_INTERVAL_SECONDS", yc.Background.RefreshIntervalSeconds, DefaultBackgroundRefreshSeconds, func(v int) bool { return v > 0 })
 
-	// Load filter configuration (enabled by default)
-	// Priority: Environment variable -> Default (true)
-	// To disable, set FILTER_USER_REPOS=false or FILTER_USER_REPOS=0
-	filterUserRepos := true
+	// Load filter configuration (DISABLED by default until permissions are properly populated)
+	// Priority: Environment variable -> Default (false)
+	// To enable, set FILTER_USER_REPOS=true or FILTER_USER_REPOS=1
+	filterUserRepos := false
 	if envFilter := os.Getenv("FILTER_USER_REPOS"); envFilter != "" {
 		filterUserRepos = envFilter == "true" || envFilter == "1"
 	}

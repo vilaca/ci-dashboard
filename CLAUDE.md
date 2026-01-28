@@ -340,8 +340,8 @@ WATCHED_REPOS=123,456                        # GitLab project IDs
 WATCHED_REPOS=owner/repo1,owner/repo2        # GitHub repos
 
 # Repository filtering
-FILTER_USER_REPOS=true                       # Only show repos where user has membership (default: true)
-                                             # Set to false or 0 to show all repos
+FILTER_USER_REPOS=false                      # Only show repos where user has membership (default: false)
+                                             # Set to true or 1 to enable filtering (requires permissions API)
 ```
 
 **Security: Token Scopes (Read-Only)**
