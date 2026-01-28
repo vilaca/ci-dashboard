@@ -164,7 +164,45 @@ type Cache interface {
 }
 ```
 
-#### 5. Configuration Module
+#### 5. Storage Module (PostgreSQL)
+**Location**: `internal/storage/`
+
+**Responsibilities**:
+- Persistent data storage (historical data)
+- Pipeline run history and metrics
+- User preferences and watched repositories
+- Webhook event logs
+- Trend analysis and statistics
+
+**Interface**:
+```go
+type Storage interface {
+    // Projects (metadata only, not cached data)
+    SaveProject(ctx context.Context, project *domain.Project) error
+    GetProject(ctx context.Context, id string) (*domain.Project, error)
+    ListProjects(ctx context.Context) ([]domain.Project, error)
+
+    // Pipelines (historical records)
+    SavePipeline(ctx context.Context, pipeline *domain.Pipeline) error
+    GetPipelineHistory(ctx context.Context, projectID string, limit int) ([]domain.Pipeline, error)
+    GetPipelineStats(ctx context.Context, projectID string, days int) (*PipelineStats, error)
+
+    // Branches (for trend tracking)
+    SaveBranchSnapshot(ctx context.Context, branch *domain.Branch) error
+
+    // User preferences
+    SaveUserPreferences(ctx context.Context, userID string, prefs *UserPreferences) error
+    GetUserPreferences(ctx context.Context, userID string) (*UserPreferences, error)
+
+    // Webhook events
+    SaveWebhookEvent(ctx context.Context, event *WebhookEvent) error
+    GetRecentEvents(ctx context.Context, limit int) ([]WebhookEvent, error)
+}
+```
+
+**Database Schema** (see [PostgreSQL Integration](#postgresql-integration) section below)
+
+#### 6. Configuration Module
 **Location**: `internal/config/`
 
 **Responsibilities**:
@@ -1693,6 +1731,1083 @@ systemctl restart ci-dashboard-aggregator
 # Web server continues serving (may get errors until aggregator is back)
 # Cache repopulates within ~30 seconds
 ```
+
+---
+
+## PostgreSQL Integration
+
+### Overview
+
+PostgreSQL provides persistent storage for historical data, user preferences, and analytics. It complements the cache layer (which handles real-time data).
+
+### Data Storage Strategy
+
+**Cache (Redis/In-Memory)**:
+- ✅ Current state (latest pipelines, branches)
+- ✅ Frequent reads (every API request)
+- ✅ TTL-based expiration (5 minutes)
+- ✅ Stale-while-revalidate pattern
+- ⚡ Ultra-fast reads (<1ms)
+
+**PostgreSQL**:
+- ✅ Historical records (all pipeline runs ever)
+- ✅ User preferences and settings
+- ✅ Webhook event logs
+- ✅ Trend analysis and statistics
+- ✅ Infrequent reads (reports, dashboards)
+- 📊 Complex queries and aggregations
+
+**Pattern**: **Cache-Aside with Write-Through**
+```
+Read Request → Check Cache → Return if found
+                           → Query PostgreSQL if miss
+                           → Store in cache
+                           → Return
+
+Background Refresh → Fetch from APIs
+                   → Write to Cache (fast)
+                   → Write to PostgreSQL (async, don't block)
+```
+
+### Database Schema
+
+**migrations/001_initial_schema.sql**:
+```sql
+-- Projects table (metadata only)
+CREATE TABLE projects (
+    id VARCHAR(255) PRIMARY KEY,
+    platform VARCHAR(50) NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    description TEXT,
+    web_url TEXT,
+    default_branch VARCHAR(255),
+    visibility VARCHAR(50),
+    avatar_url TEXT,
+    last_activity_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(platform, id)
+);
+
+CREATE INDEX idx_projects_platform ON projects(platform);
+CREATE INDEX idx_projects_last_activity ON projects(last_activity_at DESC);
+
+-- Pipelines table (historical records)
+CREATE TABLE pipelines (
+    id VARCHAR(255) NOT NULL,
+    project_id VARCHAR(255) NOT NULL REFERENCES projects(id),
+    platform VARCHAR(50) NOT NULL,
+    status VARCHAR(50) NOT NULL,
+    ref VARCHAR(255),
+    branch VARCHAR(255),
+    sha VARCHAR(255),
+    web_url TEXT,
+    author VARCHAR(255),
+    message TEXT,
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ,
+    started_at TIMESTAMPTZ,
+    finished_at TIMESTAMPTZ,
+    duration INTEGER,
+    PRIMARY KEY (platform, project_id, id)
+);
+
+CREATE INDEX idx_pipelines_project ON pipelines(project_id, created_at DESC);
+CREATE INDEX idx_pipelines_status ON pipelines(status);
+CREATE INDEX idx_pipelines_branch ON pipelines(project_id, branch, created_at DESC);
+CREATE INDEX idx_pipelines_created_at ON pipelines(created_at DESC);
+
+-- Branch snapshots (for trend tracking)
+CREATE TABLE branch_snapshots (
+    id BIGSERIAL PRIMARY KEY,
+    project_id VARCHAR(255) NOT NULL REFERENCES projects(id),
+    branch_name VARCHAR(255) NOT NULL,
+    sha VARCHAR(255),
+    commit_author VARCHAR(255),
+    commit_message TEXT,
+    commit_date TIMESTAMPTZ,
+    is_default BOOLEAN DEFAULT FALSE,
+    snapshot_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_branch_snapshots_project ON branch_snapshots(project_id, branch_name, snapshot_at DESC);
+
+-- User preferences
+CREATE TABLE users (
+    id VARCHAR(255) PRIMARY KEY,
+    username VARCHAR(255) NOT NULL,
+    email VARCHAR(255),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE user_preferences (
+    user_id VARCHAR(255) PRIMARY KEY REFERENCES users(id),
+    watched_projects TEXT[], -- Array of project IDs
+    dashboard_layout JSONB,
+    notification_settings JSONB,
+    theme VARCHAR(50) DEFAULT 'light',
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Webhook events (audit log)
+CREATE TABLE webhook_events (
+    id BIGSERIAL PRIMARY KEY,
+    platform VARCHAR(50) NOT NULL,
+    project_id VARCHAR(255),
+    event_type VARCHAR(100) NOT NULL,
+    payload JSONB NOT NULL,
+    processed BOOLEAN DEFAULT FALSE,
+    received_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_webhook_events_platform ON webhook_events(platform, received_at DESC);
+CREATE INDEX idx_webhook_events_project ON webhook_events(project_id, received_at DESC);
+CREATE INDEX idx_webhook_events_type ON webhook_events(event_type);
+
+-- Pipeline statistics (materialized view for fast queries)
+CREATE MATERIALIZED VIEW pipeline_stats AS
+SELECT
+    project_id,
+    branch,
+    COUNT(*) as total_runs,
+    COUNT(*) FILTER (WHERE status = 'success') as successful_runs,
+    COUNT(*) FILTER (WHERE status = 'failed') as failed_runs,
+    AVG(duration) FILTER (WHERE duration > 0) as avg_duration,
+    MAX(created_at) as last_run_at
+FROM pipelines
+WHERE created_at > NOW() - INTERVAL '30 days'
+GROUP BY project_id, branch;
+
+CREATE UNIQUE INDEX idx_pipeline_stats_project_branch ON pipeline_stats(project_id, branch);
+
+-- Refresh materialized view periodically (e.g., via cron or application)
+-- REFRESH MATERIALIZED VIEW CONCURRENTLY pipeline_stats;
+```
+
+### Storage Implementation
+
+**internal/storage/postgres.go**:
+```go
+package storage
+
+import (
+    "context"
+    "database/sql"
+    "encoding/json"
+    "time"
+
+    "github.com/lib/pq"
+    _ "github.com/lib/pq"
+
+    "github.com/vilaca/ci-dashboard/internal/domain"
+)
+
+type PostgresStorage struct {
+    db *sql.DB
+}
+
+func NewPostgresStorage(connString string) (*PostgresStorage, error) {
+    db, err := sql.Open("postgres", connString)
+    if err != nil {
+        return nil, err
+    }
+
+    // Test connection
+    if err := db.Ping(); err != nil {
+        return nil, err
+    }
+
+    // Set connection pool settings
+    db.SetMaxOpenConns(25)
+    db.SetMaxIdleConns(5)
+    db.SetConnMaxLifetime(5 * time.Minute)
+
+    return &PostgresStorage{db: db}, nil
+}
+
+func (s *PostgresStorage) Close() error {
+    return s.db.Close()
+}
+
+// SaveProject inserts or updates project metadata
+func (s *PostgresStorage) SaveProject(ctx context.Context, project *domain.Project) error {
+    query := `
+        INSERT INTO projects (
+            id, platform, name, description, web_url, default_branch,
+            visibility, avatar_url, last_activity_at, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+        ON CONFLICT (platform, id) DO UPDATE SET
+            name = EXCLUDED.name,
+            description = EXCLUDED.description,
+            web_url = EXCLUDED.web_url,
+            default_branch = EXCLUDED.default_branch,
+            visibility = EXCLUDED.visibility,
+            avatar_url = EXCLUDED.avatar_url,
+            last_activity_at = EXCLUDED.last_activity_at,
+            updated_at = NOW()
+    `
+
+    _, err := s.db.ExecContext(ctx, query,
+        project.ID,
+        project.Platform,
+        project.Name,
+        project.Description,
+        project.WebURL,
+        project.DefaultBranch,
+        project.Visibility,
+        project.AvatarURL,
+        project.LastActivity,
+    )
+
+    return err
+}
+
+// SavePipeline saves pipeline run to history
+func (s *PostgresStorage) SavePipeline(ctx context.Context, pipeline *domain.Pipeline) error {
+    query := `
+        INSERT INTO pipelines (
+            id, project_id, platform, status, ref, branch, sha, web_url,
+            author, message, created_at, updated_at, started_at, finished_at, duration
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+        ON CONFLICT (platform, project_id, id) DO UPDATE SET
+            status = EXCLUDED.status,
+            updated_at = EXCLUDED.updated_at,
+            finished_at = EXCLUDED.finished_at,
+            duration = EXCLUDED.duration
+    `
+
+    _, err := s.db.ExecContext(ctx, query,
+        pipeline.ID,
+        pipeline.ProjectID,
+        determinePlatform(pipeline),
+        pipeline.Status,
+        pipeline.Ref,
+        pipeline.Branch,
+        pipeline.SHA,
+        pipeline.WebURL,
+        pipeline.Author,
+        pipeline.Message,
+        pipeline.CreatedAt,
+        pipeline.UpdatedAt,
+        pipeline.StartedAt,
+        pipeline.FinishedAt,
+        pipeline.Duration,
+    )
+
+    return err
+}
+
+// GetPipelineHistory retrieves historical pipeline runs
+func (s *PostgresStorage) GetPipelineHistory(ctx context.Context, projectID string, limit int) ([]domain.Pipeline, error) {
+    query := `
+        SELECT id, project_id, platform, status, ref, branch, sha, web_url,
+               author, message, created_at, updated_at, started_at, finished_at, duration
+        FROM pipelines
+        WHERE project_id = $1
+        ORDER BY created_at DESC
+        LIMIT $2
+    `
+
+    rows, err := s.db.QueryContext(ctx, query, projectID, limit)
+    if err != nil {
+        return nil, err
+    }
+    defer rows.Close()
+
+    var pipelines []domain.Pipeline
+    for rows.Next() {
+        var p domain.Pipeline
+        var platform string
+
+        err := rows.Scan(
+            &p.ID,
+            &p.ProjectID,
+            &platform,
+            &p.Status,
+            &p.Ref,
+            &p.Branch,
+            &p.SHA,
+            &p.WebURL,
+            &p.Author,
+            &p.Message,
+            &p.CreatedAt,
+            &p.UpdatedAt,
+            &p.StartedAt,
+            &p.FinishedAt,
+            &p.Duration,
+        )
+        if err != nil {
+            return nil, err
+        }
+
+        pipelines = append(pipelines, p)
+    }
+
+    return pipelines, rows.Err()
+}
+
+// GetPipelineStats retrieves statistics for a project
+func (s *PostgresStorage) GetPipelineStats(ctx context.Context, projectID string, days int) (*PipelineStats, error) {
+    query := `
+        SELECT
+            COUNT(*) as total_runs,
+            COUNT(*) FILTER (WHERE status = 'success') as successful_runs,
+            COUNT(*) FILTER (WHERE status = 'failed') as failed_runs,
+            COUNT(*) FILTER (WHERE status = 'canceled') as canceled_runs,
+            AVG(duration) FILTER (WHERE duration > 0) as avg_duration,
+            MAX(duration) as max_duration,
+            MIN(duration) FILTER (WHERE duration > 0) as min_duration
+        FROM pipelines
+        WHERE project_id = $1
+          AND created_at > NOW() - INTERVAL '1 day' * $2
+    `
+
+    var stats PipelineStats
+    var avgDuration, maxDuration, minDuration sql.NullFloat64
+
+    err := s.db.QueryRowContext(ctx, query, projectID, days).Scan(
+        &stats.TotalRuns,
+        &stats.SuccessfulRuns,
+        &stats.FailedRuns,
+        &stats.CanceledRuns,
+        &avgDuration,
+        &maxDuration,
+        &minDuration,
+    )
+
+    if err != nil {
+        return nil, err
+    }
+
+    stats.AvgDuration = int(avgDuration.Float64)
+    stats.MaxDuration = int(maxDuration.Float64)
+    stats.MinDuration = int(minDuration.Float64)
+    stats.SuccessRate = float64(stats.SuccessfulRuns) / float64(stats.TotalRuns) * 100
+
+    return &stats, nil
+}
+
+// SaveUserPreferences saves user preferences
+func (s *PostgresStorage) SaveUserPreferences(ctx context.Context, userID string, prefs *UserPreferences) error {
+    // First ensure user exists
+    _, err := s.db.ExecContext(ctx,
+        `INSERT INTO users (id, username) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING`,
+        userID, userID)
+    if err != nil {
+        return err
+    }
+
+    // Marshal JSONB fields
+    dashboardLayout, _ := json.Marshal(prefs.DashboardLayout)
+    notificationSettings, _ := json.Marshal(prefs.NotificationSettings)
+
+    query := `
+        INSERT INTO user_preferences (
+            user_id, watched_projects, dashboard_layout, notification_settings, theme, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, NOW())
+        ON CONFLICT (user_id) DO UPDATE SET
+            watched_projects = EXCLUDED.watched_projects,
+            dashboard_layout = EXCLUDED.dashboard_layout,
+            notification_settings = EXCLUDED.notification_settings,
+            theme = EXCLUDED.theme,
+            updated_at = NOW()
+    `
+
+    _, err = s.db.ExecContext(ctx, query,
+        userID,
+        pq.Array(prefs.WatchedProjects),
+        dashboardLayout,
+        notificationSettings,
+        prefs.Theme,
+    )
+
+    return err
+}
+
+// GetUserPreferences retrieves user preferences
+func (s *PostgresStorage) GetUserPreferences(ctx context.Context, userID string) (*UserPreferences, error) {
+    query := `
+        SELECT watched_projects, dashboard_layout, notification_settings, theme
+        FROM user_preferences
+        WHERE user_id = $1
+    `
+
+    var prefs UserPreferences
+    var watchedProjects pq.StringArray
+    var dashboardLayout, notificationSettings []byte
+
+    err := s.db.QueryRowContext(ctx, query, userID).Scan(
+        &watchedProjects,
+        &dashboardLayout,
+        &notificationSettings,
+        &prefs.Theme,
+    )
+
+    if err == sql.ErrNoRows {
+        // Return default preferences
+        return &UserPreferences{
+            WatchedProjects: []string{},
+            Theme:           "light",
+        }, nil
+    }
+
+    if err != nil {
+        return nil, err
+    }
+
+    prefs.WatchedProjects = watchedProjects
+    json.Unmarshal(dashboardLayout, &prefs.DashboardLayout)
+    json.Unmarshal(notificationSettings, &prefs.NotificationSettings)
+
+    return &prefs, nil
+}
+
+// SaveWebhookEvent logs webhook event
+func (s *PostgresStorage) SaveWebhookEvent(ctx context.Context, event *WebhookEvent) error {
+    payload, _ := json.Marshal(event.Payload)
+
+    query := `
+        INSERT INTO webhook_events (platform, project_id, event_type, payload)
+        VALUES ($1, $2, $3, $4)
+    `
+
+    _, err := s.db.ExecContext(ctx, query,
+        event.Platform,
+        event.ProjectID,
+        event.EventType,
+        payload,
+    )
+
+    return err
+}
+
+// GetRecentEvents retrieves recent webhook events
+func (s *PostgresStorage) GetRecentEvents(ctx context.Context, limit int) ([]WebhookEvent, error) {
+    query := `
+        SELECT id, platform, project_id, event_type, payload, received_at
+        FROM webhook_events
+        ORDER BY received_at DESC
+        LIMIT $1
+    `
+
+    rows, err := s.db.QueryContext(ctx, query, limit)
+    if err != nil {
+        return nil, err
+    }
+    defer rows.Close()
+
+    var events []WebhookEvent
+    for rows.Next() {
+        var e WebhookEvent
+        var payload []byte
+
+        err := rows.Scan(&e.ID, &e.Platform, &e.ProjectID, &e.EventType, &payload, &e.ReceivedAt)
+        if err != nil {
+            return nil, err
+        }
+
+        json.Unmarshal(payload, &e.Payload)
+        events = append(events, e)
+    }
+
+    return events, rows.Err()
+}
+
+// Helper types
+type PipelineStats struct {
+    TotalRuns      int
+    SuccessfulRuns int
+    FailedRuns     int
+    CanceledRuns   int
+    AvgDuration    int
+    MaxDuration    int
+    MinDuration    int
+    SuccessRate    float64
+}
+
+type UserPreferences struct {
+    WatchedProjects      []string
+    DashboardLayout      map[string]interface{}
+    NotificationSettings map[string]interface{}
+    Theme                string
+}
+
+type WebhookEvent struct {
+    ID         int64
+    Platform   string
+    ProjectID  string
+    EventType  string
+    Payload    map[string]interface{}
+    ReceivedAt time.Time
+}
+
+func determinePlatform(p *domain.Pipeline) string {
+    // Determine platform from project ID format
+    if strings.Contains(p.ProjectID, "/") {
+        return "github"
+    }
+    return "gitlab"
+}
+```
+
+### Integrating with Aggregation Service
+
+**internal/app/builder.go** (updated):
+```go
+func Build(cfg *config.Config) (*Application, error) {
+    // 1. Create PostgreSQL storage (if configured)
+    var storage storage.Storage
+    if cfg.Database.PostgresURL != "" {
+        pgStorage, err := storage.NewPostgresStorage(cfg.Database.PostgresURL)
+        if err != nil {
+            return nil, fmt.Errorf("failed to connect to PostgreSQL: %w", err)
+        }
+        storage = pgStorage
+    }
+
+    // 2. Create cache
+    var cacheImpl cache.Cache
+    if cfg.Cache.Type == "redis" {
+        cacheImpl = cache.NewRedis(cfg.Cache.RedisURL)
+    } else {
+        cacheImpl = cache.NewInMemory()
+    }
+
+    // 3-6. Create connectors...
+
+    // 7. Create aggregation module (with storage)
+    aggregator := aggregation.NewAggregator(registry, cfg, storage)
+
+    // 8. Start background refresh
+    go aggregator.StartBackgroundRefresh()
+
+    // ...
+}
+```
+
+**internal/aggregation/aggregator.go** (updated):
+```go
+type Aggregator struct {
+    registry *connectors.Registry
+    config   *config.Config
+    storage  storage.Storage // Can be nil
+}
+
+// After fetching pipelines from APIs, save to PostgreSQL
+func (a *Aggregator) RefreshPipelines(ctx context.Context) error {
+    pipelines, err := a.fetchPipelinesFromConnectors(ctx)
+    if err != nil {
+        return err
+    }
+
+    // Save to PostgreSQL asynchronously (don't block)
+    if a.storage != nil {
+        go func() {
+            ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+            defer cancel()
+
+            for _, pipeline := range pipelines {
+                if err := a.storage.SavePipeline(ctx, &pipeline); err != nil {
+                    log.Printf("Failed to save pipeline to PostgreSQL: %v", err)
+                }
+            }
+        }()
+    }
+
+    return nil
+}
+```
+
+### Configuration
+
+**config/config.yaml** (updated):
+```yaml
+# Database configuration
+database:
+  postgres_url: postgres://user:pass@localhost:5432/ci_dashboard?sslmode=disable
+
+# Cache configuration (unchanged)
+cache:
+  type: memory
+  ttl: 5m
+```
+
+### Docker Compose with PostgreSQL
+
+**docker-compose.yml** (updated):
+```yaml
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_USER=ci_dashboard
+      - POSTGRES_PASSWORD=changeme
+      - POSTGRES_DB=ci_dashboard
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ci_dashboard"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+    restart: unless-stopped
+
+  aggregator:
+    build:
+      context: .
+      dockerfile: Dockerfile.aggregator
+    environment:
+      - GITLAB_TOKEN=${GITLAB_TOKEN}
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - CACHE_TYPE=memory
+      - POSTGRES_URL=postgres://ci_dashboard:changeme@postgres:5432/ci_dashboard?sslmode=disable
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - internal
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    ports:
+      - "8080:8080"
+    environment:
+      - AGGREGATOR_URL=http://aggregator:8081
+    depends_on:
+      - aggregator
+    networks:
+      - internal
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+
+networks:
+  internal:
+```
+
+### Migration Management
+
+**scripts/migrate.sh**:
+```bash
+#!/bin/bash
+set -e
+
+POSTGRES_URL=${POSTGRES_URL:-"postgres://ci_dashboard:changeme@localhost:5432/ci_dashboard?sslmode=disable"}
+
+echo "Running database migrations..."
+
+for migration in migrations/*.sql; do
+    echo "Applying $migration..."
+    psql "$POSTGRES_URL" < "$migration"
+done
+
+echo "Migrations complete!"
+```
+
+### Use Cases
+
+**1. Historical Trend Dashboard**:
+```sql
+-- Success rate over last 30 days
+SELECT
+    DATE(created_at) as date,
+    COUNT(*) as total,
+    COUNT(*) FILTER (WHERE status = 'success') as successful,
+    ROUND(100.0 * COUNT(*) FILTER (WHERE status = 'success') / COUNT(*), 2) as success_rate
+FROM pipelines
+WHERE project_id = 'my-project'
+  AND created_at > NOW() - INTERVAL '30 days'
+GROUP BY DATE(created_at)
+ORDER BY date;
+```
+
+**2. Slowest Pipelines**:
+```sql
+-- Find slowest pipelines in last 7 days
+SELECT project_id, branch, id, duration, created_at
+FROM pipelines
+WHERE created_at > NOW() - INTERVAL '7 days'
+  AND duration > 0
+ORDER BY duration DESC
+LIMIT 10;
+```
+
+**3. Most Active Projects**:
+```sql
+-- Projects with most pipeline runs
+SELECT project_id, COUNT(*) as run_count
+FROM pipelines
+WHERE created_at > NOW() - INTERVAL '7 days'
+GROUP BY project_id
+ORDER BY run_count DESC
+LIMIT 10;
+```
+
+**4. Failure Analysis**:
+```sql
+-- Projects with highest failure rate
+SELECT
+    project_id,
+    COUNT(*) as total,
+    COUNT(*) FILTER (WHERE status = 'failed') as failures,
+    ROUND(100.0 * COUNT(*) FILTER (WHERE status = 'failed') / COUNT(*), 2) as failure_rate
+FROM pipelines
+WHERE created_at > NOW() - INTERVAL '7 days'
+GROUP BY project_id
+HAVING COUNT(*) > 10  -- At least 10 runs
+ORDER BY failure_rate DESC;
+```
+
+### Performance Considerations
+
+**Indexes**: Already included in schema for common queries
+
+**Partitioning** (for very large datasets):
+```sql
+-- Partition pipelines table by month
+CREATE TABLE pipelines (
+    -- columns...
+) PARTITION BY RANGE (created_at);
+
+CREATE TABLE pipelines_2026_01 PARTITION OF pipelines
+    FOR VALUES FROM ('2026-01-01') TO ('2026-02-01');
+
+CREATE TABLE pipelines_2026_02 PARTITION OF pipelines
+    FOR VALUES FROM ('2026-02-01') TO ('2026-03-01');
+-- etc.
+```
+
+**Materialized Views**: Refresh periodically for expensive aggregations
+
+**Connection Pooling**: Already configured (25 max connections)
+
+### Resource Impact
+
+**With PostgreSQL**:
+- Aggregator Memory: ~250 MB (+50 MB for database driver)
+- Disk Space: ~100 MB per 100K pipeline runs
+- CPU: Minimal impact (async writes)
+
+**Write Performance**:
+- Cache writes: <1ms (in-memory)
+- PostgreSQL writes: 5-10ms (async, don't block)
+- Total impact: None (async)
+
+---
+
+## Redis vs PostgreSQL: Which to Use?
+
+### Quick Answer
+
+**For aggregating real-time data** → Use **Redis** (or in-memory cache)
+
+**For storing historical data** → Use **PostgreSQL**
+
+**Best approach** → Use **both together**:
+- Redis for caching current state (fast reads)
+- PostgreSQL for historical records (complex queries)
+
+### Detailed Comparison
+
+| Feature | Redis | PostgreSQL | Winner |
+|---------|-------|------------|--------|
+| **Read Speed** | <1ms | 5-10ms | Redis 10x faster |
+| **Write Speed** | <1ms | 5-10ms | Redis 10x faster |
+| **Data Structure** | Key-value, simple | Relational, complex | Depends on need |
+| **Query Complexity** | Simple (GET/SET) | SQL (JOINs, aggregations) | PostgreSQL |
+| **Persistence** | Optional (RDB/AOF) | Always persisted | PostgreSQL |
+| **Data Loss Risk** | High (if memory-only) | Low (ACID) | PostgreSQL |
+| **Memory Usage** | High (all in RAM) | Low (disk + cache) | PostgreSQL |
+| **Cost** | RAM expensive | Disk cheap | PostgreSQL |
+| **TTL/Expiration** | Built-in | Manual cleanup | Redis |
+| **Scalability** | Horizontal (cluster) | Vertical (read replicas) | Redis |
+
+### Use Case Comparison
+
+#### Scenario 1: Real-time Dashboard (Current State Only)
+
+**Need**: Show current status of all pipelines (latest only)
+
+**Best Choice**: **Redis** or **In-Memory**
+
+**Why**:
+- Only care about current state
+- Need ultra-fast reads (<1ms)
+- Data is ephemeral (refreshed every 5 min)
+- No historical queries needed
+- Simpler deployment
+
+**Architecture**:
+```
+APIs → Cache (Redis/In-Memory) → Dashboard
+         ↑
+    Background Refresh
+    (every 5 minutes)
+```
+
+#### Scenario 2: Historical Analysis + Trends
+
+**Need**: Show pipeline history, success rates over time, trends
+
+**Best Choice**: **PostgreSQL**
+
+**Why**:
+- Need to query historical data
+- Complex aggregations (AVG, GROUP BY, trends)
+- Data must persist forever
+- Relational queries (JOIN projects with pipelines)
+- Generate reports
+
+**Architecture**:
+```
+APIs → Cache (current) → Dashboard (real-time)
+  ↓
+PostgreSQL (historical) → Reports/Analytics
+```
+
+#### Scenario 3: Both Real-time + Historical (Recommended)
+
+**Need**: Fast dashboard + historical analysis
+
+**Best Choice**: **Redis + PostgreSQL Together**
+
+**Why**:
+- Get benefits of both
+- Redis: Fast current state
+- PostgreSQL: Historical records and analytics
+- Small added complexity
+
+**Architecture**:
+```
+┌─────────────────────────────────────────┐
+│        Background Refresh               │
+│                                         │
+│  1. Fetch from APIs                     │
+│  2. Write to Redis (fast, non-blocking)│
+│  3. Write to PostgreSQL (async)        │
+└─────────────────────────────────────────┘
+             │           │
+             ↓           ↓
+        ┌────────┐  ┌──────────┐
+        │ Redis  │  │PostgreSQL│
+        │(cache) │  │(history) │
+        └───┬────┘  └────┬─────┘
+            │            │
+            ↓            ↓
+    ┌──────────┐  ┌──────────────┐
+    │Dashboard │  │Analytics/    │
+    │(fast)    │  │Reports       │
+    └──────────┘  └──────────────┘
+```
+
+### Deployment Options
+
+#### Option 1: In-Memory Only (Simplest)
+```yaml
+# Pros: Simplest, fastest, no external dependencies
+# Cons: Data lost on restart, limited by RAM
+
+cache:
+  type: memory
+  ttl: 5m
+```
+
+**When to use**: Development, small deployments, don't care about history
+
+#### Option 2: Redis Only
+```yaml
+# Pros: Fast, persistent (with AOF), simple queries
+# Cons: Limited query capabilities, expensive at scale
+
+cache:
+  type: redis
+  redis_url: redis://localhost:6379
+  ttl: 5m
+```
+
+**When to use**: Need persistence but no complex queries
+
+#### Option 3: PostgreSQL Only
+```yaml
+# Pros: Full SQL, complex queries, persistent
+# Cons: Slower reads, no built-in TTL
+
+database:
+  postgres_url: postgres://localhost:5432/ci_dashboard
+```
+
+**When to use**: Historical analysis is main use case
+
+#### Option 4: Redis + PostgreSQL (Recommended)
+```yaml
+# Pros: Fast reads + complex queries + persistence
+# Cons: Two systems to manage
+
+cache:
+  type: redis
+  redis_url: redis://localhost:6379
+  ttl: 5m
+
+database:
+  postgres_url: postgres://localhost:5432/ci_dashboard
+```
+
+**When to use**: Production with real-time + historical needs
+
+### Redis Data Structures for Aggregation
+
+If you choose Redis for aggregation:
+
+**Option 1: Simple Key-Value**
+```
+Key: gitlab:projects
+Value: JSON array of all projects
+
+Key: github:projects
+Value: JSON array of all projects
+
+Key: gitlab:project:123:pipelines
+Value: JSON array of recent pipelines
+```
+
+**Option 2: Redis Hashes** (more efficient)
+```
+HSET projects gitlab:123 '{"name":"my-project",...}'
+HSET projects github:owner/repo '{"name":"my-repo",...}'
+
+HSET pipelines gitlab:123:main:latest '{"status":"success",...}'
+```
+
+**Option 3: Redis Sorted Sets** (for rankings)
+```
+ZADD project:activity <timestamp> "gitlab:123"
+ZADD project:activity <timestamp> "github:owner/repo"
+
+# Get most active projects
+ZREVRANGE project:activity 0 9  # Top 10
+```
+
+**Option 4: Redis Streams** (for events)
+```
+XADD pipeline:events * platform gitlab project 123 status success
+
+# Read recent events
+XREAD COUNT 100 STREAMS pipeline:events 0
+```
+
+### PostgreSQL Aggregation Queries
+
+If you choose PostgreSQL for aggregation:
+
+**Aggregating across platforms**:
+```sql
+-- All projects from all platforms
+SELECT platform, COUNT(*) as count
+FROM projects
+GROUP BY platform;
+
+-- Cross-platform pipeline statistics
+SELECT
+    platform,
+    COUNT(*) as total,
+    COUNT(*) FILTER (WHERE status = 'success') as successful,
+    AVG(duration) as avg_duration
+FROM pipelines
+WHERE created_at > NOW() - INTERVAL '7 days'
+GROUP BY platform;
+
+-- Most active projects (across all platforms)
+SELECT
+    p.platform,
+    p.name,
+    COUNT(pl.id) as pipeline_count
+FROM projects p
+LEFT JOIN pipelines pl ON pl.project_id = p.id
+WHERE pl.created_at > NOW() - INTERVAL '7 days'
+GROUP BY p.platform, p.name
+ORDER BY pipeline_count DESC
+LIMIT 10;
+```
+
+### Resource Requirements
+
+#### In-Memory Only
+```
+Memory: 200 MB (for ~1000 projects, ~10K pipelines)
+Disk: 0 MB
+Setup: None
+```
+
+#### Redis
+```
+Memory: 500 MB (Redis overhead + data)
+Disk: 100 MB (for RDB snapshots)
+Setup: Install Redis
+```
+
+#### PostgreSQL
+```
+Memory: 100 MB (just application)
+Disk: 1 GB (for historical data)
+Setup: Install PostgreSQL + run migrations
+```
+
+#### Redis + PostgreSQL
+```
+Memory: 600 MB (both)
+Disk: 1 GB (PostgreSQL)
+Setup: Install both + run migrations
+```
+
+### Decision Matrix
+
+Choose based on your needs:
+
+| Requirement | Recommended | Alternative |
+|-------------|-------------|-------------|
+| Dev/Testing | In-Memory | Redis |
+| Simple production | Redis | In-Memory + cron backup |
+| Historical analysis | PostgreSQL + Redis | PostgreSQL only |
+| Large scale (>10K projects) | Redis + PostgreSQL | PostgreSQL + read replicas |
+| Budget constrained | In-Memory | PostgreSQL |
+| No DevOps expertise | In-Memory | Redis (managed) |
+| Enterprise | Redis + PostgreSQL | All three (+ Redis cluster) |
+
+### Recommended Approach
+
+**Start Simple, Scale Up**:
+
+1. **Phase 1** (MVP): In-memory only
+   - Fastest to build
+   - No external dependencies
+   - Perfect for testing
+
+2. **Phase 2** (Production): Add Redis
+   - Persistent across restarts
+   - Share cache between processes
+   - Still simple
+
+3. **Phase 3** (Analytics): Add PostgreSQL
+   - Historical data storage
+   - Complex queries and reports
+   - Trend analysis
+
+You can run all three phases with the same codebase - just change configuration!
 
 ---
 
