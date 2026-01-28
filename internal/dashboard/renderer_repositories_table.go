@@ -58,11 +58,10 @@ func (r *HTMLRenderer) RenderRepositoriesSkeleton(w io.Writer, userProfiles []do
 					<th style="text-align: center;">MRs/PRs</th>
 					<th style="text-align: center;">Last Commit Author</th>
 					<th style="text-align: right;">Last Commit</th>
-					<th style="text-align: center;">Last Fetched</th>
 				</tr>
 			</thead>
 			<tbody id="repositories-tbody">
-				<tr><td colspan="9" class="loading-cell">Loading repositories...</td></tr>
+				<tr><td colspan="8" class="loading-cell">Loading repositories...</td></tr>
 			</tbody>
 		</table>
 	</div>
@@ -436,21 +435,10 @@ func repositoriesTableScript() string {
 				const branchCount = repo.BranchCount || 0;
 				const openMRs = repo.OpenMRCount || 0;
 				const draftMRs = repo.DraftMRCount || 0;
-				const totalMRs = repo.TotalMRCount || 0;
-				const lastFetched = repo.LastFetchedAt || '-';
 
+				// Display open MRs count with draft indication
 				let mrDisplay = '-';
-				if (totalMRs > 0) {
-					if (openMRs > 0) {
-						if (draftMRs > 0) {
-							mrDisplay = openMRs + ' <span style="font-size: 11px; color: var(--text-secondary);">(' + draftMRs + ' draft, ' + totalMRs + ' total)</span>';
-						} else {
-							mrDisplay = openMRs + ' <span style="font-size: 11px; color: var(--text-secondary);">(' + totalMRs + ' total)</span>';
-						}
-					} else {
-						mrDisplay = '0 <span style="font-size: 11px; color: var(--text-secondary);">(' + totalMRs + ' total)</span>';
-					}
-				} else if (openMRs > 0) {
+				if (openMRs > 0) {
 					if (draftMRs > 0) {
 						mrDisplay = openMRs + ' <span style="font-size: 11px; color: var(--text-secondary);">(' + draftMRs + ' draft)</span>';
 					} else {
@@ -481,8 +469,7 @@ func repositoriesTableScript() string {
 					'<td class="count-cell">' + branchCount + '</td>' +
 					'<td class="count-cell">' + mrDisplay + '</td>' +
 					'<td class="committer-cell">' + committer + '</td>' +
-					'<td class="commit-cell">' + lastCommit + '</td>' +
-					'<td class="count-cell" style="font-size: 12px; color: var(--text-secondary);">' + lastFetched + '</td>';
+					'<td class="commit-cell">' + lastCommit + '</td>';
 
 				tbody.appendChild(row);
 			});

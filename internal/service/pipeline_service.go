@@ -65,6 +65,31 @@ func fixBranchRepositoryNames(branches []domain.Branch, project domain.Project) 
 	}
 }
 
+// filterOpenBranches filters branches to only include "open" branches:
+// - Not the default branch (main/master)
+// - Has recent activity (commits within last 60 days)
+func filterOpenBranches(branches []domain.Branch) []domain.Branch {
+	filtered := make([]domain.Branch, 0, len(branches))
+	cutoffDate := time.Now().Add(-60 * 24 * time.Hour) // 60 days ago
+
+	for _, branch := range branches {
+		// Skip default branches (main/master)
+		if branch.IsDefault {
+			continue
+		}
+
+		// Skip branches with no recent activity (older than 60 days)
+		if !branch.LastCommitDate.IsZero() && branch.LastCommitDate.Before(cutoffDate) {
+			continue
+		}
+
+		// This is an open/active branch
+		filtered = append(filtered, branch)
+	}
+
+	return filtered
+}
+
 // fixPipelineRepositoryNames updates pipeline repository names from project ID to project name.
 func fixPipelineRepositoryNames(pipelines []domain.Pipeline, project domain.Project) {
 	for i := range pipelines {
@@ -385,7 +410,10 @@ func (s *PipelineService) GetPipelinesForProject(ctx context.Context, projectID 
 	return pipelines, nil
 }
 
-// GetBranchesForProject retrieves branches with pipelines for a single project.
+// GetBranchesForProject retrieves open/active branches with pipelines for a single project.
+// Only returns branches that are:
+// - Not the default branch (main/master)
+// - Have recent activity (commits within last 60 days)
 func (s *PipelineService) GetBranchesForProject(ctx context.Context, project domain.Project, limit int) ([]domain.BranchWithPipeline, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -403,6 +431,9 @@ func (s *PipelineService) GetBranchesForProject(ctx context.Context, project dom
 
 	// Fill in repository name
 	fixBranchRepositoryNames(branches, project)
+
+	// Filter to only open/active branches
+	branches = filterOpenBranches(branches)
 
 	// Get pipeline for each branch
 	var results []domain.BranchWithPipeline

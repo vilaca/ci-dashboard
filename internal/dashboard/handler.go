@@ -203,12 +203,10 @@ type RepositoryDefaultBranch struct {
 	Project        domain.Project   `json:"Project"`
 	DefaultBranch  *domain.Branch   `json:"DefaultBranch"`
 	Pipeline       *domain.Pipeline `json:"Pipeline"`
-	BranchCount    int              `json:"BranchCount"`
-	OpenMRCount    int              `json:"OpenMRCount"`
-	DraftMRCount   int              `json:"DraftMRCount"`
-	ReviewingCount int              `json:"ReviewingCount"`
-	TotalMRCount   int              `json:"TotalMRCount"`   // Total MRs (open + closed/merged)
-	LastFetchedAt  string           `json:"LastFetchedAt"` // When data was last fetched (formatted)
+	BranchCount    int              `json:"BranchCount"`    // Count of open/active branches (non-default, recent activity)
+	OpenMRCount    int              `json:"OpenMRCount"`    // Count of open MRs/PRs
+	DraftMRCount   int              `json:"DraftMRCount"`   // Count of draft MRs/PRs (subset of OpenMRCount)
+	ReviewingCount int              `json:"ReviewingCount"` // Count of MRs where current user is reviewer
 }
 
 // handleRepositoriesBulk returns repositories as paginated JSON (cache only, no API calls).
@@ -260,46 +258,26 @@ func (h *Handler) handleRepositoriesBulk(w http.ResponseWriter, r *http.Request)
 				project.Name, defaultBranch.CommitAuthor, defaultBranch.LastCommitDate, defaultBranch.Name)
 		}
 
-		// Fetch cached MRs for this project
+		// Fetch cached MRs for this project (only OPEN MRs are fetched)
 		mrs, err := h.pipelineService.GetMergeRequestsForProject(ctx, project)
 		if err != nil {
 			h.logger.Printf("Failed to get merge requests for project %s: %v", project.Name, err)
 		}
 
-		// Count open and draft MRs
-		openMRCount := 0
+		// Count MRs (all are open since we only fetch open ones)
+		openMRCount := len(mrs)
 		draftMRCount := 0
 		reviewingCount := 0
-		totalMRCount := len(mrs) // Total includes all states (open, closed, merged)
 		for _, mr := range mrs {
-			if mr.State == "opened" {
-				openMRCount++
-				if mr.IsDraft {
-					draftMRCount++
-				}
-				// Check if current user is a reviewer
-				for _, reviewer := range mr.Reviewers {
-					if reviewer == h.gitlabCurrentUser || reviewer == h.githubCurrentUser {
-						reviewingCount++
-						break
-					}
-				}
+			if mr.IsDraft {
+				draftMRCount++
 			}
-		}
-
-		// Format last fetched time (using project's last activity or current time)
-		lastFetched := "Just now"
-		if !project.LastActivity.IsZero() {
-			// Use project's last activity time as a proxy for "last fetched"
-			duration := time.Since(project.LastActivity)
-			if duration < time.Minute {
-				lastFetched = "Just now"
-			} else if duration < time.Hour {
-				lastFetched = fmt.Sprintf("%dm ago", int(duration.Minutes()))
-			} else if duration < 24*time.Hour {
-				lastFetched = fmt.Sprintf("%dh ago", int(duration.Hours()))
-			} else {
-				lastFetched = fmt.Sprintf("%dd ago", int(duration.Hours()/24))
+			// Check if current user is a reviewer
+			for _, reviewer := range mr.Reviewers {
+				if reviewer == h.gitlabCurrentUser || reviewer == h.githubCurrentUser {
+					reviewingCount++
+					break
+				}
 			}
 		}
 
@@ -311,8 +289,6 @@ func (h *Handler) handleRepositoriesBulk(w http.ResponseWriter, r *http.Request)
 			OpenMRCount:    openMRCount,
 			DraftMRCount:   draftMRCount,
 			ReviewingCount: reviewingCount,
-			TotalMRCount:   totalMRCount,
-			LastFetchedAt:  lastFetched,
 		})
 	}
 
