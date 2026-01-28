@@ -207,6 +207,8 @@ type RepositoryDefaultBranch struct {
 	OpenMRCount    int              `json:"OpenMRCount"`
 	DraftMRCount   int              `json:"DraftMRCount"`
 	ReviewingCount int              `json:"ReviewingCount"`
+	TotalMRCount   int              `json:"TotalMRCount"`   // Total MRs (open + closed/merged)
+	LastFetchedAt  string           `json:"LastFetchedAt"` // When data was last fetched (formatted)
 }
 
 // handleRepositoriesBulk returns repositories as paginated JSON (cache only, no API calls).
@@ -268,6 +270,7 @@ func (h *Handler) handleRepositoriesBulk(w http.ResponseWriter, r *http.Request)
 		openMRCount := 0
 		draftMRCount := 0
 		reviewingCount := 0
+		totalMRCount := len(mrs) // Total includes all states (open, closed, merged)
 		for _, mr := range mrs {
 			if mr.State == "opened" {
 				openMRCount++
@@ -284,6 +287,22 @@ func (h *Handler) handleRepositoriesBulk(w http.ResponseWriter, r *http.Request)
 			}
 		}
 
+		// Format last fetched time (using project's last activity or current time)
+		lastFetched := "Just now"
+		if !project.LastActivity.IsZero() {
+			// Use project's last activity time as a proxy for "last fetched"
+			duration := time.Since(project.LastActivity)
+			if duration < time.Minute {
+				lastFetched = "Just now"
+			} else if duration < time.Hour {
+				lastFetched = fmt.Sprintf("%dm ago", int(duration.Minutes()))
+			} else if duration < 24*time.Hour {
+				lastFetched = fmt.Sprintf("%dh ago", int(duration.Hours()))
+			} else {
+				lastFetched = fmt.Sprintf("%dd ago", int(duration.Hours()/24))
+			}
+		}
+
 		results = append(results, RepositoryDefaultBranch{
 			Project:        project,
 			DefaultBranch:  defaultBranch,
@@ -292,6 +311,8 @@ func (h *Handler) handleRepositoriesBulk(w http.ResponseWriter, r *http.Request)
 			OpenMRCount:    openMRCount,
 			DraftMRCount:   draftMRCount,
 			ReviewingCount: reviewingCount,
+			TotalMRCount:   totalMRCount,
+			LastFetchedAt:  lastFetched,
 		})
 	}
 
